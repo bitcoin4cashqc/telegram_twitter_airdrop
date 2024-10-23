@@ -1,0 +1,18 @@
+{
+  "name": "duko_tg_bot",
+  "version": "1.0.0",
+  "description": "A telegram bot that incentivise twitter interactions for duko token.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Samuel Millette",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "mongoose": "^8.7.2",
+    "telegraf": "^4.16.3"
+  }
+}
