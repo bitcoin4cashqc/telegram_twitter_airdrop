@@ -10,6 +10,8 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_API);
 // Set up Bull Queue for background jobs
 const taskQueue = new Queue('bot-task-queue', 'redis://localhost:6379');
 
+const admin = process.env.TG_ADMIN_ID
+
 // Helper to parse command and argument
 const parseCommand = (text) => {
   const [command, ...args] = text.trim().split(/\s+/);
@@ -49,6 +51,35 @@ bot.command('update', async (ctx) => {
 
   ctx.reply(`Updating your Twitter handle to: ${newTwitterHandle}`);
 });
+
+// Handle /update command
+bot.command('create_task', async (ctx) => {
+    const { args } = parseCommand(ctx.message.text);
+  
+
+    // Check if the telegramId is an admin
+    if (admin != ctx.message.from.id) {
+        return ctx.reply(`Unauthorized access attempt by user ${ctx.message.from.id}`);
+        
+    }
+
+    // If no argument provided , prompt the user
+    if (!args.length) {
+      return ctx.reply('Please provide task data. Example: /create_task link_to_post rewardAmount timeLimitMinutes');
+    }
+  
+    const link_to_post = args[0];
+    const rewardAmount = args[1];
+    const timeLimitMinutes = args[2];
+  
+    // Enqueue background job to update user's Twitter handle
+    taskQueue.add({ telegramId: ctx.message.from.id, command: 'update', twitterHandle: newTwitterHandle });
+  
+    ctx.reply(`Updating your Twitter handle to: ${newTwitterHandle}`);
+  });
+
+
+
 
 // Setting up Webhooks
 const app = express();
