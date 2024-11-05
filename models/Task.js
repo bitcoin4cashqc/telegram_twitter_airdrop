@@ -14,6 +14,10 @@ const taskSchema = new mongoose.Schema({
     type: Number, 
     required: true 
   },  // Time limit in minutes for the task
+  taskId: { 
+    type: Number, 
+    required: true 
+  },  // identifier
   createdAt: { 
     type: Date, 
     default: Date.now 
