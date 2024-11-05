@@ -10,11 +10,10 @@
   "author": "Samuel Millette",
   "license": "ISC",
   "dependencies": {
-    "bull": "^4.16.3",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "mongoose": "^8.7.2",
-    "redis": "^4.7.0",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "twitter-lite": "^1.1.0"
   }
 }
