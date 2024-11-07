@@ -2,8 +2,8 @@ require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const Twitter = require('twitter-lite');
-
+const { TwitterApi } = require('twitter-api-v2');
+const { TwitterApiRateLimitPlugin } = require('@twitter-api-v2/plugin-rate-limit');
 const User = require('./models/User');
 const Task = require('./models/Task');
 const OAuthSession = require('./models/OAuthSession');
@@ -133,26 +133,25 @@ bot.action('register', (ctx) => ctx.scene.enter('register'));
 bot.action('update', (ctx) => ctx.scene.enter('update'));
 bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 
-
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
+  if (!checkRateLimit(ctx.from.id)) {
+    return ctx.reply("You have exceeded the rate limit. Please try again later.");
+  }
+
   const taskId = ctx.match[1];
-  const twitterClient = new Twitter({
-    consumer_key: process.env.TWITTER_CONSUMER_KEY,
-    consumer_secret: process.env.TWITTER_CONSUMER_SECRET,
+  const twitterClient = new TwitterApi({
+    appKey: process.env.TWITTER_CONSUMER_KEY,
+    appSecret: process.env.TWITTER_CONSUMER_SECRET,
   });
 
   try {
-    const response = await twitterClient.getRequestToken(`${process.env.WEBHOOK}/twitter_callback`);
+    const { oauth_token, oauth_token_secret } = await twitterClient.generateAuthLink(`${process.env.WEBHOOK}/twitter_callback`);
 
     // Save the OAuth session in the database
-    await OAuthSession.create({
-      oauth_token: response.oauth_token,
-      oauth_token_secret: response.oauth_token_secret,
-      taskId,
-    });
+    await OAuthSession.create({ oauth_token, oauth_token_secret, taskId });
 
-    const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${response.oauth_token}`;
+    const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
     await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
   } catch (error) {
     console.error("Error getting request token:", error);
@@ -169,29 +168,22 @@ app.get('/twitter_callback', async (req, res) => {
   const { oauth_token, oauth_verifier } = req.query;
 
   try {
-    // Retrieve session from database using oauth_token
     const session = await OAuthSession.findOne({ oauth_token });
-    if (!session) {
-      return res.send("Session expired or invalid. Please try again.");
-    }
+    if (!session) return res.send("Session expired or invalid. Please try again.");
 
-    const twitterClient = new Twitter({
-      consumer_key: process.env.TWITTER_CONSUMER_KEY,
-      consumer_secret: process.env.TWITTER_CONSUMER_SECRET,
+    const twitterClient = new TwitterApi({
+      appKey: process.env.TWITTER_CONSUMER_KEY,
+      appSecret: process.env.TWITTER_CONSUMER_SECRET,
+      accessToken: session.oauth_token,
+      accessSecret: session.oauth_token_secret,
     });
 
-    const response = await twitterClient.getAccessToken({
-      oauth_token,
-      oauth_token_secret: session.oauth_token_secret,
-      oauth_verifier,
-    });
+    const { accessToken, accessSecret } = await twitterClient.login(oauth_verifier);
 
-    // Fetch task details from the database using taskId for Twitter actions
     const task = await Task.findOne({ taskId: session.taskId });
     if (!task) return res.send("Task not found.");
 
-    await processTask(task.postUrl, response.oauth_token, response.oauth_token_secret, session.taskId);
-
+    await processTask(task.postUrl, accessToken, accessSecret, session.taskId);
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
@@ -201,18 +193,18 @@ app.get('/twitter_callback', async (req, res) => {
 
 // Function to handle Twitter actions
 async function processTask(postUrl, accessToken, accessSecret, taskId) {
-  const twitterClient = new Twitter({
-    consumer_key: process.env.TWITTER_CONSUMER_KEY,
-    consumer_secret: process.env.TWITTER_CONSUMER_SECRET,
-    access_token_key: accessToken,
-    access_token_secret: accessSecret,
+  const twitterClient = new TwitterApi({
+    appKey: process.env.TWITTER_CONSUMER_KEY,
+    appSecret: process.env.TWITTER_CONSUMER_SECRET,
+    accessToken,
+    accessSecret,
   });
 
   try {
     const tweetId = postUrl.split("/").pop();
-    await twitterClient.post("favorites/create", { id: tweetId });
-    await twitterClient.post(`statuses/retweet/${tweetId}`);
-    await twitterClient.post("statuses/update", { status: "Awesome post!", in_reply_to_status_id: tweetId });
+    await twitterClient.v2.like(tweetId);
+    await twitterClient.v2.retweet(tweetId);
+    await twitterClient.v2.reply("Awesome post!", tweetId);
 
     console.log("Twitter task successfully processed for task:", taskId);
     bot.telegram.sendMessage(admin, `Twitter task for task ID ${taskId} completed successfully.`);
