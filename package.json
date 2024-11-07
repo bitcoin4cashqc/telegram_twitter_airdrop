@@ -10,6 +10,7 @@
   "author": "Samuel Millette",
   "license": "ISC",
   "dependencies": {
+    "@twitter-api-v2/plugin-rate-limit": "^1.1.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "mongoose": "^8.7.2",

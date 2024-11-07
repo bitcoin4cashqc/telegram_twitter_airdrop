@@ -16,6 +16,10 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_API);
 bot.use(session());
 const admin = process.env.TG_ADMIN_ID;
 
+// Define rate limit plugin
+const rateLimitPlugin = new TwitterApiRateLimitPlugin();
+
+
 
 //hardcode menu
 
@@ -32,7 +36,7 @@ const user_menu = [
 const admin_menu = [
   ...user_menu,
   [
-    { text: "📋 Create Task", callback_data: "create_tasks" }
+    { text: "📋 Create Task", callback_data: "create_task" }
   ],
 ]
 // Define the register scene
@@ -69,7 +73,7 @@ const updateScene = new Scenes.WizardScene(
 const createTaskScene = new Scenes.WizardScene(
   'create_task',
   async (ctx) => {
-    if (admin !== ctx.message.from.id.toString()) {
+    if (admin !== ctx.from.id.toString()) {
       await ctx.reply("Unauthorized access attempt.");
       return ctx.scene.leave();
     }
@@ -135,11 +139,10 @@ bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
-  if (!checkRateLimit(ctx.from.id)) {
-    return ctx.reply("You have exceeded the rate limit. Please try again later.");
-  }
+
 
   const taskId = ctx.match[1];
+  const telegramId = ctx.from.id
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
@@ -149,7 +152,7 @@ bot.action(/task_button_(.+)/, async (ctx) => {
     const { oauth_token, oauth_token_secret } = await twitterClient.generateAuthLink(`${process.env.WEBHOOK}/twitter_callback`);
 
     // Save the OAuth session in the database
-    await OAuthSession.create({ oauth_token, oauth_token_secret, taskId });
+    await OAuthSession.create({telegramId, oauth_token, oauth_token_secret, taskId });
 
     const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
     await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
@@ -183,7 +186,7 @@ app.get('/twitter_callback', async (req, res) => {
     const task = await Task.findOne({ taskId: session.taskId });
     if (!task) return res.send("Task not found.");
 
-    await processTask(task.postUrl, accessToken, accessSecret, session.taskId);
+    await processTask(task.postUrl, accessToken, accessSecret, session.taskId, session.telegramId);
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
@@ -191,26 +194,46 @@ app.get('/twitter_callback', async (req, res) => {
   }
 });
 
-// Function to handle Twitter actions
-async function processTask(postUrl, accessToken, accessSecret, taskId) {
+// Function to handle Twitter actions with rate limit handling
+async function processTask(postUrl, accessToken, accessSecret, taskId, telegramId) {
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
     accessToken,
     accessSecret,
+    plugins: [rateLimitPlugin],
   });
+
+  async function autoRetryOnRateLimitError(callback) {
+    while (true) {
+      try {
+        return await callback();
+      } catch (error) {
+        if (error.rateLimitError && error.rateLimit) {
+          
+          const timeToWait = error.rateLimit.reset * 1000 - Date.now();
+          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", accessToken);
+          
+          bot.telegram.sendMessage(telegramId, `Twitter is rate limiting you. Gotta wait: `+timeToWait / 1000 + " seconds. Your task is pending and will be retried right after.");
+          await new Promise((resolve) => setTimeout(resolve, timeToWait));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
 
   try {
     const tweetId = postUrl.split("/").pop();
-    await twitterClient.v2.like(tweetId);
-    await twitterClient.v2.retweet(tweetId);
-    await twitterClient.v2.reply("Awesome post!", tweetId);
+    await autoRetryOnRateLimitError(() => twitterClient.v2.like(twitterClient.currentUser.userId,tweetId));
+    await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(twitterClient.currentUser.userId,tweetId));
+    await autoRetryOnRateLimitError(() => twitterClient.v2.reply("Awesome post!", tweetId));
 
     console.log("Twitter task successfully processed for task:", taskId);
-    bot.telegram.sendMessage(admin, `Twitter task for task ID ${taskId} completed successfully.`);
+    bot.telegram.sendMessage(telegramId, `Twitter task for task ID ${taskId} completed successfully.`);
   } catch (error) {
     console.error("Error processing Twitter actions:", error);
-    bot.telegram.sendMessage(admin, `Failed to complete Twitter task for task ID ${taskId}.`);
+    bot.telegram.sendMessage(telegramId, `Failed to complete Twitter task for task ID ${taskId}.`);
   }
 }
 

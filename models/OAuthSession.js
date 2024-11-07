@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const OAuthSessionSchema = new mongoose.Schema({
+  telegramId: { type: Number, required: true },
   oauth_token: { type: String, required: true },
   oauth_token_secret: { type: String, required: true },
   taskId: { type: String, required: true },
