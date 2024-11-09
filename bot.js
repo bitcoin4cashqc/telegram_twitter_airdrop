@@ -90,7 +90,7 @@ const updateScene = new Scenes.WizardScene(
   async (ctx) => {
     // Validate Solana Wallet Address
     const solanaWallet = ctx.message.text;
-    
+
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
       return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
@@ -225,7 +225,7 @@ const app = express();
 app.use(bot.webhookCallback('/telegram-webhook'));
 bot.telegram.setWebhook(`${process.env.WEBHOOK}/telegram-webhook`);
 
-// Step 2: Modify OAuth initiation function to accept comment
+// Modify OAuth initiation function to accept comment
 async function initiateOAuth(ctx, taskId, comment) {
   const telegramId = ctx.from.id;
   const twitterClient = new TwitterApi({
@@ -259,7 +259,6 @@ app.get('/twitter_callback', async (req, res) => {
   try {
     const session = await OAuthSession.findOne({ oauth_token });
     if (!session) return res.send("Session expired or invalid. Please try again.");
-
     const twitterClient = new TwitterApi({
       appKey: process.env.TWITTER_CONSUMER_KEY,
       appSecret: process.env.TWITTER_CONSUMER_SECRET,
@@ -272,7 +271,7 @@ app.get('/twitter_callback', async (req, res) => {
     const task = await Task.findOne({ taskId: session.taskId });
     if (!task) return res.send("Task not found.");
 
-    await processTask(session,task);
+    await processTask(session,task,accessToken,accessSecret);
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
@@ -281,12 +280,12 @@ app.get('/twitter_callback', async (req, res) => {
 });
 
 // Function to handle Twitter actions with rate limit handling
-async function processTask(oauthsession,task) {
+async function processTask(oauthsession,task,accessToken,accessSecret) {
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
-    accessToken: oauthsession.oauth_token,
-    accessSecret: oauthsession.oauth_token_secret,
+    accessToken,
+    accessSecret,
     plugins: [rateLimitPlugin],
   });
 
@@ -298,7 +297,7 @@ async function processTask(oauthsession,task) {
         if (error.rateLimitError && error.rateLimit) {
           
           const timeToWait = error.rateLimit.reset * 1000 - Date.now();
-          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", oauthsession.oauth_token);
+          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", accessToken);
           
           bot.telegram.sendMessage(oauthsession.telegramId, `Twitter is rate limiting you. Gotta wait: `+timeToWait / 1000 + " seconds. Your task is pending and will be retried right after.");
           await new Promise((resolve) => setTimeout(resolve, timeToWait));
@@ -315,12 +314,12 @@ async function processTask(oauthsession,task) {
 
 
   try {
-    //const xId = await twitterClient.v2.me();
-    //console.log("Current user X ID: " + xId.data.id);
+    const xId = await twitterClient.v2.me();
+    console.log("Current user X ID: " + xId.data.id);
     const tweetId = task.postUrl.split("/").pop();
-    //await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
-    //await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
-    //await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+    await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
+    await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
+    await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
 
     //would add to user balance the session. oauth mongo
 
@@ -360,6 +359,8 @@ async function processUpdate(telegramId, solanaWallet) {
 
 // Function to create a new task in the Task model
 async function createTask(postUrl, rewardAmount, timeLimitMinutes, taskId) {
+  timeLimitMinutes = new Date(Date.now() + timeLimitMinutes * 60000); // Set the expiration time
+
   const newTask = new Task({ postUrl, rewardAmount, timeLimitMinutes, taskId });
   await newTask.save();
   console.log(`Task created for post: ${postUrl} with reward: ${rewardAmount}`);
