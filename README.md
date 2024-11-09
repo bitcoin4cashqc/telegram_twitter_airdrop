@@ -1,1 +1,1 @@
-# duko_tg_bot
+# telegram_twitter_airdrop
