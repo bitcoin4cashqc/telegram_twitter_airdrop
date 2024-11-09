@@ -196,6 +196,27 @@ bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
+
+   // Retrieve the task to check expiration
+   const task = await Task.findOne({ taskId });
+   if (!task) {
+     await ctx.reply("Task not found.");
+     return;
+   }
+ 
+   // Check if the task has expired
+   const currentTime = new Date();
+   if (currentTime > task.expirationTime) {
+     await ctx.reply("This task has expired. Please choose another task.");
+     return bot.handleUpdate({
+      update_id: ctx.update.update_id,
+      message: {
+        ...ctx.message,
+        text: '/start'
+      }
+    }, ctx);
+   }
+   
   ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
 });
 
