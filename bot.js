@@ -25,8 +25,8 @@ const rateLimitPlugin = new TwitterApiRateLimitPlugin();
 
 const user_menu = [
   [
-    { text: "📝 Register Account", callback_data: "register" },
-    { text: "🔄 Update Account", callback_data: "update" }
+    { text: "📝 Register Wallet", callback_data: "register" },
+    { text: "🔄 Update Wallet", callback_data: "update" }
   ],
   [
     { text: "📋 View Tasks", callback_data: "view_tasks" }
@@ -45,13 +45,14 @@ const admin_menu = [
 const registerScene = new Scenes.WizardScene(
   'register',
   async (ctx) => {
-    await ctx.reply("Please provide your Twitter handle (e.g., @yourhandle):");
+    await ctx.reply("Please provide your Solana Wallet:");
     return ctx.wizard.next();
   },
   async (ctx) => {
-    const twitterHandle = ctx.message.text;
-    await processRegister(ctx.message.from.id, twitterHandle);
-    await ctx.reply(`Registered Twitter handle: ${twitterHandle}`);
+    //check here using math/wallet library the validity of it 
+    const solanaWallet = ctx.message.text;
+    await processRegister(ctx.message.from.id, solanaWallet);
+    await ctx.reply(`Your Solana Wallet: ${solanaWallet}`);
     return ctx.scene.leave();
   }
 );
@@ -61,13 +62,13 @@ const registerScene = new Scenes.WizardScene(
 const updateScene = new Scenes.WizardScene(
   'update',
   async (ctx) => {
-    await ctx.reply("Please provide your new Twitter handle (e.g., @newhandle):");
+    await ctx.reply("Please provide your new Solana Wallet:");
     return ctx.wizard.next();
   },
   async (ctx) => {
-    const newTwitterHandle = ctx.message.text;
-    await processUpdate(ctx.message.from.id, newTwitterHandle);
-    await ctx.reply(`Updated Twitter handle to: ${newTwitterHandle}`);
+    const solanaWallet = ctx.message.text;
+    await processUpdate(ctx.message.from.id, solanaWallet);
+    await ctx.reply(`Updated Solana Wallet to: ${solanaWallet}`);
     return ctx.scene.leave();
   }
 );
@@ -277,24 +278,24 @@ async function processTask(oauthsession,task) {
 }
 
 // Function to handle user registration
-async function processRegister(telegramId, twitterHandle) {
+async function processRegister(telegramId, solanaWallet) {
   let user = await User.findOne({ telegramId });
   if (!user) {
-    user = new User({ telegramId, twitterHandle, balance: 0 });
+    user = new User({ telegramId, solanaWallet, balance: 0 });
     await user.save();
-    console.log(`User ${telegramId} registered with Twitter handle: ${twitterHandle}`);
+    console.log(`User ${telegramId} registered with Solana Wallet: ${solanaWallet}`);
   } else {
     console.log(`User ${telegramId} already exists`);
   }
 }
 
 // Function to handle user updates
-async function processUpdate(telegramId, twitterHandle) {
+async function processUpdate(telegramId, solanaWallet) {
   let user = await User.findOne({ telegramId });
   if (user) {
-    user.twitterHandle = twitterHandle;
+    user.solanaWallet = solanaWallet;
     await user.save();
-    console.log(`User ${telegramId} updated with new Twitter handle: ${twitterHandle}`);
+    console.log(`User ${telegramId} updated with new Solana Wallet: ${solanaWallet}`);
   } else {
     console.log(`User ${telegramId} does not exist`);
   }
