@@ -39,6 +39,8 @@ const admin_menu = [
     { text: "📋 Create Task", callback_data: "create_task" }
   ],
 ]
+
+
 // Define the register scene
 const registerScene = new Scenes.WizardScene(
   'register',
@@ -53,6 +55,7 @@ const registerScene = new Scenes.WizardScene(
     return ctx.scene.leave();
   }
 );
+
 
 // Define the update scene
 const updateScene = new Scenes.WizardScene(
@@ -115,8 +118,24 @@ const createTaskScene = new Scenes.WizardScene(
 );
 
 
+const commentScene = new Scenes.WizardScene(
+  'commentScene',
+  async (ctx) => {
+    ctx.scene.state.taskId = ctx.match[1]; // Save taskId to state for later use
+    await ctx.reply("Please provide your comment for the Twitter reply:");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    ctx.scene.state.comment = ctx.message.text; // Save comment to state
+    await initiateOAuth(ctx, ctx.scene.state.taskId, ctx.scene.state.comment); // Call OAuth initiation
+    return ctx.scene.leave(); // Exit scene
+  }
+);
+
+
+
 // Create a stage for the scenes and register the scenes
-const stage = new Scenes.Stage([registerScene, updateScene, createTaskScene]);
+const stage = new Scenes.Stage([registerScene, updateScene, createTaskScene, commentScene]);
 bot.use(stage.middleware());
 
 
@@ -137,12 +156,20 @@ bot.action('register', (ctx) => ctx.scene.enter('register'));
 bot.action('update', (ctx) => ctx.scene.enter('update'));
 bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 
+
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
+  ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
+});
 
+// Twitter OAuth callback
+const app = express();
+app.use(bot.webhookCallback('/telegram-webhook'));
+bot.telegram.setWebhook(`${process.env.WEBHOOK}/telegram-webhook`);
 
-  const taskId = ctx.match[1];
-  const telegramId = ctx.from.id
+// Step 2: Modify OAuth initiation function to accept comment
+async function initiateOAuth(ctx, taskId, comment) {
+  const telegramId = ctx.from.id;
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
@@ -151,8 +178,14 @@ bot.action(/task_button_(.+)/, async (ctx) => {
   try {
     const { oauth_token, oauth_token_secret } = await twitterClient.generateAuthLink(`${process.env.WEBHOOK}/twitter_callback`);
 
-    // Save the OAuth session in the database
-    await OAuthSession.create({telegramId, oauth_token, oauth_token_secret, taskId });
+    // Save the OAuth session in the database along with the comment
+    await OAuthSession.create({
+      telegramId,
+      oauth_token,
+      oauth_token_secret,
+      taskId,
+      comment, // Save the comment with the session
+    });
 
     const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
     await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
@@ -160,12 +193,7 @@ bot.action(/task_button_(.+)/, async (ctx) => {
     console.error("Error getting request token:", error);
     ctx.reply("Failed to initiate Twitter authorization.");
   }
-});
-
-// Twitter OAuth callback
-const app = express();
-app.use(bot.webhookCallback('/telegram-webhook'));
-bot.telegram.setWebhook(`${process.env.WEBHOOK}/telegram-webhook`);
+}
 
 app.get('/twitter_callback', async (req, res) => {
   const { oauth_token, oauth_verifier } = req.query;
@@ -186,7 +214,7 @@ app.get('/twitter_callback', async (req, res) => {
     const task = await Task.findOne({ taskId: session.taskId });
     if (!task) return res.send("Task not found.");
 
-    await processTask(task.postUrl, accessToken, accessSecret, session.taskId, session.telegramId);
+    await processTask(session,task);
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
@@ -195,12 +223,12 @@ app.get('/twitter_callback', async (req, res) => {
 });
 
 // Function to handle Twitter actions with rate limit handling
-async function processTask(postUrl, accessToken, accessSecret, taskId, telegramId) {
+async function processTask(oauthsession,task) {
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
-    accessToken,
-    accessSecret,
+    accessToken: oauthsession.oauth_token,
+    accessSecret: oauthsession.oauth_token_secret,
     plugins: [rateLimitPlugin],
   });
 
@@ -212,9 +240,9 @@ async function processTask(postUrl, accessToken, accessSecret, taskId, telegramI
         if (error.rateLimitError && error.rateLimit) {
           
           const timeToWait = error.rateLimit.reset * 1000 - Date.now();
-          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", accessToken);
+          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", oauthsession.oauth_token);
           
-          bot.telegram.sendMessage(telegramId, `Twitter is rate limiting you. Gotta wait: `+timeToWait / 1000 + " seconds. Your task is pending and will be retried right after.");
+          bot.telegram.sendMessage(oauthsession.telegramId, `Twitter is rate limiting you. Gotta wait: `+timeToWait / 1000 + " seconds. Your task is pending and will be retried right after.");
           await new Promise((resolve) => setTimeout(resolve, timeToWait));
           continue;
         }
@@ -223,17 +251,28 @@ async function processTask(postUrl, accessToken, accessSecret, taskId, telegramI
     }
   }
 
-  try {
-    const tweetId = postUrl.split("/").pop();
-    await autoRetryOnRateLimitError(() => twitterClient.v2.like(twitterClient.currentUser.userId,tweetId));
-    await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(twitterClient.currentUser.userId,tweetId));
-    await autoRetryOnRateLimitError(() => twitterClient.v2.reply("Awesome post!", tweetId));
+  // Get the stored comment from the OAuth session
+  
+  const comment = session.comment
 
-    console.log("Twitter task successfully processed for task:", taskId);
-    bot.telegram.sendMessage(telegramId, `Twitter task for task ID ${taskId} completed successfully.`);
+
+  try {
+    //const xId = await twitterClient.v2.me();
+    //console.log("Current user X ID: " + xId.data.id);
+    const tweetId = task.postUrl.split("/").pop();
+    //await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
+    //await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
+    //await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+
+    //would add to user balance the session. oauth mongo
+
+    console.log("Twitter task successfully processed for task:", oauthsession.taskId);
+    bot.telegram.sendMessage(oauthsession.telegramId, `Twitter task for task ID ${oauthsession.taskId} completed successfully for ${task.rewardAmount} tokens.`);
+    await OAuthSession.deleteOne({ telegramId: oauthsession.telegramId })
   } catch (error) {
+    
     console.error("Error processing Twitter actions:", error);
-    bot.telegram.sendMessage(telegramId, `Failed to complete Twitter task for task ID ${taskId}.`);
+    bot.telegram.sendMessage(oauthsession.telegramId, `Failed to complete Twitter task for task ID ${oauthsession.taskId}.`);
   }
 }
 
