@@ -46,6 +46,15 @@ const admin_menu = [
   ],
 ]
 
+// Function to handle the /start command
+async function showMainMenu(ctx) {
+  const main_menu = (admin !== ctx.from.id.toString()) ? user_menu : admin_menu;
+  await ctx.reply("Welcome! 👋 Choose an option below to get started:", {
+    reply_markup: {
+      inline_keyboard: main_menu
+    }
+  });
+}
 
 // Function to validate Solana wallet address
 function isValidSolanaAddress(address) {
@@ -70,7 +79,8 @@ const registerScene = new Scenes.WizardScene(
     // Validate Solana Wallet Address
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
-      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
+      await ctx.scene.leave();
+      return showMainMenu(ctx);  // Call the main menu function directly
     }
 
     await processRegister(ctx.message.from.id, solanaWallet);
@@ -93,7 +103,8 @@ const updateScene = new Scenes.WizardScene(
 
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
-      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
+      await ctx.scene.leave();
+      return showMainMenu(ctx);  // Call the main menu function directly
     }
     
     await processUpdate(ctx.message.from.id, solanaWallet);
@@ -124,17 +135,17 @@ const createTaskScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    ctx.scene.state.timeLimitMinutes = ctx.message.text;
+    ctx.scene.state.expirationTime = ctx.message.text;
     await ctx.reply("Please provide the task ID:");
     return ctx.wizard.next();
   },
   async (ctx) => {
-    const { postUrl, rewardAmount, timeLimitMinutes } = ctx.scene.state;
+    const { postUrl, rewardAmount, expirationTime } = ctx.scene.state;
     const taskId = ctx.message.text;
 
-    await createTask(postUrl, rewardAmount, timeLimitMinutes, taskId);
+    await createTask(postUrl, rewardAmount, expirationTime, taskId);
     await ctx.reply(
-      `Task created:\nPost: ${postUrl}\nReward: ${rewardAmount}\nTime: ${timeLimitMinutes} mins\nID: ${taskId}`,
+      `Task created:\nPost: ${postUrl}\nReward: ${rewardAmount}\nTime: ${expirationTime} mins\nID: ${taskId}`,
       {
         reply_markup: {
           inline_keyboard: [
@@ -157,12 +168,6 @@ const commentScene = new Scenes.WizardScene(
   },
   async (ctx) => {
 
-    // Validate comment
-    if (!ctx.message.text || ctx.message.text == "") {
-      await ctx.reply("Invalid Comment.");
-      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
-    }
-
     ctx.scene.state.comment = ctx.message.text; // Save comment to state
     await initiateOAuth(ctx, ctx.scene.state.taskId, ctx.scene.state.comment); // Call OAuth initiation
     return ctx.scene.leave(); // Exit scene
@@ -177,15 +182,8 @@ bot.use(stage.middleware());
 
 
 
-// Handle /start command with an interactive menu
-bot.command('start', async (ctx) => {
-  const main_menu = (admin !== ctx.message.from.id.toString()) ? user_menu : admin_menu;
-  await ctx.reply("Welcome! 👋 Choose an option below to get started:", {
-    reply_markup: {
-      inline_keyboard: main_menu
-    }
-  });
-});
+// Handle /start command
+bot.command('start', (ctx) => showMainMenu(ctx));
 
 
 // Action handlers for each button to enter the relevant scenes
@@ -196,7 +194,7 @@ bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
-
+   const taskId = ctx.match[1]; // Save taskId to state for later use
    // Retrieve the task to check expiration
    const task = await Task.findOne({ taskId });
    if (!task) {
@@ -206,15 +204,10 @@ bot.action(/task_button_(.+)/, async (ctx) => {
  
    // Check if the task has expired
    const currentTime = new Date();
+
    if (currentTime > task.expirationTime) {
      await ctx.reply("This task has expired. Please choose another task.");
-     return bot.handleUpdate({
-      update_id: ctx.update.update_id,
-      message: {
-        ...ctx.message,
-        text: '/start'
-      }
-    }, ctx);
+     return showMainMenu(ctx);  // Call the main menu function directly
    }
    
   ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
@@ -310,12 +303,12 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
 
   // Get the stored comment from the OAuth session
   
-  const comment = session.comment
+  const comment = oauthsession.comment
 
 
   try {
     const xId = await twitterClient.v2.me();
-    console.log("Current user X ID: " + xId.data.id);
+    
     const tweetId = task.postUrl.split("/").pop();
     await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
     await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
@@ -358,10 +351,10 @@ async function processUpdate(telegramId, solanaWallet) {
 }
 
 // Function to create a new task in the Task model
-async function createTask(postUrl, rewardAmount, timeLimitMinutes, taskId) {
-  timeLimitMinutes = new Date(Date.now() + timeLimitMinutes * 60000); // Set the expiration time
+async function createTask(postUrl, rewardAmount, expirationTime, taskId) {
+  expirationTime = new Date(Date.now() + expirationTime * 60000); // Set the expiration time
 
-  const newTask = new Task({ postUrl, rewardAmount, timeLimitMinutes, taskId });
+  const newTask = new Task({ postUrl, rewardAmount, expirationTime, taskId });
   await newTask.save();
   console.log(`Task created for post: ${postUrl} with reward: ${rewardAmount}`);
 }

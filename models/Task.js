@@ -10,7 +10,7 @@ const taskSchema = new mongoose.Schema({
     type: Number, 
     required: true 
   },  // Reward amount for users who interact
-  timeLimitMinutes: { 
+  expirationTime: { 
     type: Date, 
     required: true 
   },  // Expiration date
