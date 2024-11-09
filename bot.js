@@ -66,6 +66,41 @@ function isValidSolanaAddress(address) {
   }
 }
 
+
+
+// Function to notify all users of a new task with rate limit handling
+async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx) {
+  const users = await User.find(); // Retrieve all users from the database
+  const messageText = `New Task Available:\n\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`;
+  
+  let messageCount = 0;
+  const maxMessagesPerSecond = 30; // Safe limit based on Telegram's broadcast rate limits
+
+  for (const user of users) {
+    try {
+      await bot.telegram.sendMessage(user.telegramId, messageText, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Participate in Task", callback_data: `task_button_${taskId}` }],
+          ],
+        },
+      });
+
+      messageCount++;
+      
+      // Respect the 30 messages per second limit
+      if (messageCount >= maxMessagesPerSecond) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second
+        messageCount = 0; // Reset message count after waiting
+      }
+    } catch (error) {
+      console.error(`Failed to send message to user ${user.telegramId}:`, error);
+      await ctx.reply(`Failed to send message to user ${user.telegramId}`);
+    }
+  }
+}
+
+
 // Define the register scene
 const registerScene = new Scenes.WizardScene(
   'register',
@@ -144,16 +179,13 @@ const createTaskScene = new Scenes.WizardScene(
     const taskId = ctx.message.text;
 
     await createTask(postUrl, rewardAmount, expirationTime, taskId);
-    await ctx.reply(
-      `Task created:\nPost: ${postUrl}\nReward: ${rewardAmount}\nTime: ${expirationTime} mins\nID: ${taskId}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "Participate in Task", callback_data: `task_button_${taskId}` }],
-          ],
-        },
-      }
-    );
+    
+    // Notify all users about the new task
+    await notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx);
+
+    // Inform admin that the task has been sent to all users
+    await ctx.reply(`Task created and sent to all users:\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`);
+    
     return ctx.scene.leave();
   }
 );
