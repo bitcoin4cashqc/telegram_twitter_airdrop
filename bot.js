@@ -156,6 +156,13 @@ const commentScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
+
+    // Validate comment
+    if (!ctx.message.text || ctx.message.text == "") {
+      await ctx.reply("Invalid Comment.");
+      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
+    }
+
     ctx.scene.state.comment = ctx.message.text; // Save comment to state
     await initiateOAuth(ctx, ctx.scene.state.taskId, ctx.scene.state.comment); // Call OAuth initiation
     return ctx.scene.leave(); // Exit scene
