@@ -2,11 +2,17 @@ require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
+
 const { TwitterApi } = require('twitter-api-v2');
 const { TwitterApiRateLimitPlugin } = require('@twitter-api-v2/plugin-rate-limit');
+
+const { PublicKey } = require('@solana/web3.js');
+
 const User = require('./models/User');
 const Task = require('./models/Task');
 const OAuthSession = require('./models/OAuthSession');
+
+
 
 // MongoDB connection
 mongoose.connect('mongodb://localhost:27017/telegram_bot', {});
@@ -41,6 +47,16 @@ const admin_menu = [
 ]
 
 
+// Function to validate Solana wallet address
+function isValidSolanaAddress(address) {
+  try {
+    new PublicKey(address);
+    return PublicKey.isOnCurve(address); // Validates it's a Solana public key on the curve
+  } catch (error) {
+    return false; // Invalid if an error occurs
+  }
+}
+
 // Define the register scene
 const registerScene = new Scenes.WizardScene(
   'register',
@@ -49,8 +65,14 @@ const registerScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    //check here using math/wallet library the validity of it 
     const solanaWallet = ctx.message.text;
+
+    // Validate Solana Wallet Address
+    if (!isValidSolanaAddress(solanaWallet)) {
+      await ctx.reply("The Solana Wallet address is invalid.");
+      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
+    }
+
     await processRegister(ctx.message.from.id, solanaWallet);
     await ctx.reply(`Your Solana Wallet: ${solanaWallet}`);
     return ctx.scene.leave();
@@ -66,7 +88,14 @@ const updateScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
+    // Validate Solana Wallet Address
     const solanaWallet = ctx.message.text;
+    
+    if (!isValidSolanaAddress(solanaWallet)) {
+      await ctx.reply("The Solana Wallet address is invalid.");
+      return ctx.wizard.selectStep(0); // Go back to the first step to re-enter the address
+    }
+    
     await processUpdate(ctx.message.from.id, solanaWallet);
     await ctx.reply(`Updated Solana Wallet to: ${solanaWallet}`);
     return ctx.scene.leave();
