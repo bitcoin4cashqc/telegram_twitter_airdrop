@@ -16,7 +16,8 @@ const taskSchema = new mongoose.Schema({
   },  // Expiration date
   taskId: { 
     type: Number, 
-    required: true 
+    required: true,
+    index: true 
   },  // identifier
   createdAt: { 
     type: Date, 
