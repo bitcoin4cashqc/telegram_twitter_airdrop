@@ -37,7 +37,7 @@ const user_menu = [
     { text: "🔄 Update Wallet", callback_data: "update" }
   ],
   [
-    { text: "📋 View Tasks", callback_data: "view_tasks" }
+    { text: "📋 View Tasks", callback_data: "view_tasks" },{ text: "📋 View Airdrops", callback_data: "view_airdrops" }
   ],
 ]
 
@@ -75,7 +75,7 @@ async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx
   const users = await User.find(); // Retrieve all users from the database
   var messageText = ""
   var dataToSend = {}
-  if (types == "task"){
+  if (types == "tasks"){
     messageText = `New Task Available:\n\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`;
     dataToSend = { text: "Participate in Task", callback_data: `task_button_${taskId}` }
   }else{
@@ -107,6 +107,65 @@ async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx
       console.error(`Failed to send message to user ${user.telegramId}:`, error);
       await ctx.reply(`Failed to send message to user ${user.telegramId}`);
     }
+  }
+}
+
+
+// Function to get all active tasks and send them to the user
+async function getAllTasks(ctx) {
+  try {
+    // Fetch all tasks that haven't expired
+    const tasks = await Task.find({ expirationTime: { $gt: new Date() } });
+    
+    // If no tasks are available
+    if (tasks.length === 0) {
+      await ctx.reply("No active tasks are available at the moment.");
+      return;
+    }
+
+    // Display each task with its details and participation button
+    for (const task of tasks) {
+      const messageText = `New Task Available:\n\nPost: ${task.postUrl}\nReward: ${task.rewardAmount}\nExpires At: ${task.expirationTime.toLocaleString()}\nTask ID: ${task.taskId}`;
+      const dataToSend = { text: "Participate in Task", callback_data: `task_button_${task.taskId}` };
+
+      await ctx.reply(messageText, {
+        reply_markup: {
+          inline_keyboard: [[dataToSend]]
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Error fetching tasks:", error);
+    await ctx.reply("Failed to retrieve tasks. Please try again later.");
+  }
+}
+
+// Function to get all active airdrops and send them to the user
+async function getAllAirdrops(ctx) {
+  try {
+    // Fetch all airdrops that haven't expired
+    const airdrops = await Airdrop.find({ expirationTime: { $gt: new Date() } });
+    
+    // If no airdrops are available
+    if (airdrops.length === 0) {
+      await ctx.reply("No active airdrops are available at the moment.");
+      return;
+    }
+
+    // Display each airdrop with its details and participation button
+    for (const airdrop of airdrops) {
+      const messageText = `Airdrop Available:\n\nReward: ${airdrop.rewardAmount}\nExpires At: ${airdrop.expirationTime.toLocaleString()}\nAirdrop ID: ${airdrop.airdropId}`;
+      const dataToSend = { text: "Participate in Airdrop", callback_data: `airdrop_button_${airdrop.airdropId}` };
+
+      await ctx.reply(messageText, {
+        reply_markup: {
+          inline_keyboard: [[dataToSend]]
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Error fetching airdrops:", error);
+    await ctx.reply("Failed to retrieve airdrops. Please try again later.");
   }
 }
 
@@ -271,6 +330,9 @@ bot.action('register', (ctx) => ctx.scene.enter('register'));
 bot.action('update', (ctx) => ctx.scene.enter('update'));
 bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 bot.action('create_airdrop', (ctx) => ctx.scene.enter('create_airdrop'));
+bot.action('view_tasks', (ctx) => getAllTasks(ctx));
+bot.action('view_airdrops', (ctx) => getAllAirdrops(ctx));
+
 
 
 
@@ -312,6 +374,8 @@ bot.action(/airdrop_button_(.+)/, async (ctx) => {
      await ctx.reply("This aidrop has expired. Please choose another aidrop.");
      return showMainMenu(ctx);  // Call the main menu function directly
    }
+
+   await ctx.reply("You claimed the airdrop!");
    
 });
 
