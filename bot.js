@@ -10,6 +10,7 @@ const { PublicKey } = require('@solana/web3.js');
 
 const User = require('./models/User');
 const Task = require('./models/Task');
+const Airdrop = require('./models/Airdrop');
 const OAuthSession = require('./models/OAuthSession');
 
 
@@ -43,7 +44,7 @@ const user_menu = [
 const admin_menu = [
   ...user_menu,
   [
-    { text: "📋 Create Task", callback_data: "create_task" }
+    { text: "📋 Create Task", callback_data: "create_task" },{ text: "📋 Create Airdrop", callback_data: "create_airdrop" }
   ],
 ]
 
@@ -70,9 +71,17 @@ function isValidSolanaAddress(address) {
 
 
 // Function to notify all users of a new task with rate limit handling
-async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx) {
+async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx, types) {
   const users = await User.find(); // Retrieve all users from the database
-  const messageText = `New Task Available:\n\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`;
+  var messageText = ""
+  var dataToSend = {}
+  if (types == "task"){
+    messageText = `New Task Available:\n\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`;
+    dataToSend = { text: "Participate in Task", callback_data: `task_button_${taskId}` }
+  }else{
+    messageText = `New Airdrop Available:\n\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nAirdrop ID: ${taskId}`;
+    dataToSend = { text: "Participate in Airdrop", callback_data: `airdrop_button_${taskId}` }
+  }
   
   let messageCount = 0;
   const maxMessagesPerSecond = 30; // Safe limit based on Telegram's broadcast rate limits
@@ -82,7 +91,7 @@ async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx
       await bot.telegram.sendMessage(user.telegramId, messageText, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: "Participate in Task", callback_data: `task_button_${taskId}` }],
+            [dataToSend],
           ],
         },
       });
@@ -182,10 +191,48 @@ const createTaskScene = new Scenes.WizardScene(
     await createTask(postUrl, rewardAmount, expirationTime, taskId);
     
     // Notify all users about the new task
-    await notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx);
+    await notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx, "tasks");
 
     // Inform admin that the task has been sent to all users
     await ctx.reply(`Task created and sent to all users:\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`);
+    
+    return ctx.scene.leave();
+  }
+);
+
+// Define the create_task scene (admin-only)
+const createAirdropScene = new Scenes.WizardScene(
+  'create_airdrop',
+  async (ctx) => {
+    if (admin !== ctx.from.id.toString()) {
+      await ctx.reply("Unauthorized access attempt.");
+      return ctx.scene.leave();
+    }
+    await ctx.reply("Please provide the reward amount:");
+    return ctx.wizard.next();
+  },
+  
+  async (ctx) => {
+    ctx.scene.state.rewardAmount = ctx.message.text;
+    await ctx.reply("Please provide the time limit in minutes:");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    ctx.scene.state.expirationTime = ctx.message.text;
+    await ctx.reply("Please provide the airdrop ID:");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const { rewardAmount, expirationTime } = ctx.scene.state;
+    const airdropId = ctx.message.text;
+
+    await createAirdrop(rewardAmount, expirationTime, airdropId);
+    
+    // Notify all users about the new task
+    await notifyAllUsers("", rewardAmount, expirationTime, airdropId, ctx, "airdrop");
+
+    // Inform admin that the task has been sent to all users
+    await ctx.reply(`Airdrop created and sent to all users:\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${airdropId}`);
     
     return ctx.scene.leave();
   }
@@ -210,7 +257,7 @@ const commentScene = new Scenes.WizardScene(
 
 
 // Create a stage for the scenes and register the scenes
-const stage = new Scenes.Stage([registerScene, updateScene, createTaskScene, commentScene]);
+const stage = new Scenes.Stage([registerScene, updateScene, createTaskScene, commentScene, createAirdropScene]);
 bot.use(stage.middleware());
 
 
@@ -223,27 +270,49 @@ bot.command('start', (ctx) => showMainMenu(ctx));
 bot.action('register', (ctx) => ctx.scene.enter('register'));
 bot.action('update', (ctx) => ctx.scene.enter('update'));
 bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
+bot.action('create_airdrop', (ctx) => ctx.scene.enter('create_airdrop'));
+
 
 
 // OAuth initiation and callback handler
 bot.action(/task_button_(.+)/, async (ctx) => {
-   const taskId = ctx.match[1]; // Save taskId to state for later use
+  const taskId = ctx.match[1]; // Save taskId to state for later use
+  // Retrieve the task to check expiration
+  const task = await Task.findOne({ taskId });
+  if (!task) {
+    await ctx.reply("Task not found.");
+    return;
+  }
+
+  // Check if the airdrop has expired
+  const currentTime = new Date();
+
+  if (currentTime > task.expirationTime) {
+    await ctx.reply("This Task has expired. Please choose another task.");
+    return showMainMenu(ctx);  // Call the main menu function directly
+  }
+  
+  ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
+});
+
+// OAuth initiation and callback handler
+bot.action(/airdrop_button_(.+)/, async (ctx) => {
+   const airdropId = ctx.match[1]; // Save airdropId to state for later use
    // Retrieve the task to check expiration
-   const task = await Task.findOne({ taskId });
-   if (!task) {
-     await ctx.reply("Task not found.");
+   const aidrop = await Airdrop.findOne({ airdropId });
+   if (!aidrop) {
+     await ctx.reply("Airdrop not found.");
      return;
    }
  
    // Check if the task has expired
    const currentTime = new Date();
 
-   if (currentTime > task.expirationTime) {
-     await ctx.reply("This task has expired. Please choose another task.");
+   if (currentTime > aidrop.expirationTime) {
+     await ctx.reply("This aidrop has expired. Please choose another aidrop.");
      return showMainMenu(ctx);  // Call the main menu function directly
    }
    
-  ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
 });
 
 // Twitter OAuth callback
@@ -354,7 +423,7 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
         console.error("Non-rate limit error occurred:", error);
         bot.telegram.sendMessage(oauthsession.telegramId, `An error occurred while processing your task. Please try again later.`);
       }
-      
+
     }
     
     
@@ -403,6 +472,15 @@ async function createTask(postUrl, rewardAmount, expirationTime, taskId) {
   const newTask = new Task({ postUrl, rewardAmount, expirationTime, taskId });
   await newTask.save();
   console.log(`Task created for post: ${postUrl} with reward: ${rewardAmount}`);
+}
+
+// Function to create a new task in the Task model
+async function createAirdrop(rewardAmount, expirationTime, airdropId) {
+  expirationTime = new Date(Date.now() + expirationTime * 60000); // Set the expiration time
+
+  const newAirdrop = new Airdrop({rewardAmount, expirationTime, airdropId });
+  await newAirdrop.save();
+  console.log(`Airdrop created with reward: ${rewardAmount}`);
 }
 
 
