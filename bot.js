@@ -13,6 +13,7 @@ const Task = require('./models/Task');
 const OAuthSession = require('./models/OAuthSession');
 
 
+const skipTwitter = process.env.SKIP_TWITTER === 'true';
 
 // MongoDB connection
 mongoose.connect('mongodb://localhost:27017/telegram_bot', {});
@@ -342,9 +343,22 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
     const xId = await twitterClient.v2.me();
     
     const tweetId = task.postUrl.split("/").pop();
-    await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
-    await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
-    await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+
+    if (!skipTwitter){
+      
+      try {
+        await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
+        await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
+        await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+      } catch (error) {
+        console.error("Non-rate limit error occurred:", error);
+        bot.telegram.sendMessage(oauthsession.telegramId, `An error occurred while processing your task. Please try again later.`);
+      }
+      
+    }
+    
+    
+    
 
     //would add to user balance the session. oauth mongo
 
