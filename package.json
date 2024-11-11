@@ -10,8 +10,10 @@
   "author": "Samuel Millette",
   "license": "ISC",
   "dependencies": {
+    "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.4",
     "@twitter-api-v2/plugin-rate-limit": "^1.1.0",
+    "bignumber.js": "^9.1.2",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "mongoose": "^8.7.2",

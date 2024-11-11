@@ -6,7 +6,14 @@ const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const { TwitterApiRateLimitPlugin } = require('@twitter-api-v2/plugin-rate-limit');
 
-const { PublicKey } = require('@solana/web3.js');
+const BigNumber = require('bignumber.js'); // For accurate floating-point arithmetic
+
+
+const { Connection, Keypair, PublicKey, clusterApiUrl } = require('@solana/web3.js');
+const { Token, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+
+const NETWORK = clusterApiUrl('mainnet-beta'); // Change to 'devnet' for testing
+const connection = new Connection(NETWORK, 'confirmed');
 
 const User = require('./models/User');
 const Task = require('./models/Task');
@@ -41,6 +48,10 @@ const user_menu = [
   [
     { text: "📋 View Tasks", callback_data: "view_tasks" },{ text: "📋 View Airdrops", callback_data: "view_airdrops" }
   ],
+  [
+    { text: "💼 View Wallet", callback_data: "view_wallet" } 
+  
+  ]
 ]
 
 const admin_menu = [
@@ -215,6 +226,52 @@ async function removeFromUserBalance(telegramId, amount) {
   return true; // Deduction successful
 }
 
+
+
+/////////////////////////////SOLANA/////////////////////////////////
+
+
+// Initialize keypair from private key in .env
+function loadKeypairFromEnv() {
+  const secretKey = Uint8Array.from(JSON.parse(process.env.SOLANA_PRIVATE_KEY));
+  return Keypair.fromSecretKey(secretKey);
+}
+
+// Define the withdrawal function
+async function processWithdrawal(userWalletAddress, amount) {
+  try {
+    const adminKeypair = loadKeypairFromEnv();
+    const userPublicKey = new PublicKey(userWalletAddress);
+    const mintAddress = new PublicKey(process.env.TOKEN_MINT_ADDRESS);
+
+    // Load token program and retrieve token decimals
+    const token = new Token(connection, mintAddress, TOKEN_PROGRAM_ID, adminKeypair);
+    const mintInfo = await token.getMintInfo();
+    const decimals = mintInfo.decimals;
+
+    // Convert amount to smallest units based on decimals
+    const amountInSmallestUnits = new BigNumber(amount).multipliedBy(new BigNumber(10).pow(decimals)).toFixed(0);
+
+    // Get admin and user token accounts
+    const adminTokenAccount = await token.getOrCreateAssociatedAccountInfo(adminKeypair.publicKey);
+    const userTokenAccount = await token.getOrCreateAssociatedAccountInfo(userPublicKey);
+
+    // Transfer tokens
+    await token.transfer(
+      adminTokenAccount.address,
+      userTokenAccount.address,
+      adminKeypair.publicKey,
+      [],
+      new BigNumber(amountInSmallestUnits).toNumber() // Ensure it's an integer
+    );
+
+    console.log(`Successfully transferred ${amount} tokens to ${userWalletAddress}`);
+    return `Successfully transferred ${amount} tokens to ${userWalletAddress}`;
+  } catch (error) {
+    console.error("Error during withdrawal:", error);
+    throw new Error("Withdrawal failed. Please try again later.");
+  }
+}
 /////////////////////////////SCENES/////////////////////////////////
 
 
@@ -361,7 +418,7 @@ const commentScene = new Scenes.WizardScene(
   }
 );
 
-
+//////////////////////////////////////////////////////////////////////////3
 
 // Create a stage for the scenes and register the scenes
 const stage = new Scenes.Stage([registerScene, updateScene, createTaskScene, commentScene, createAirdropScene]);
@@ -371,7 +428,7 @@ bot.use(stage.middleware());
 
 // Handle /start command
 bot.command('start', (ctx) => showMainMenu(ctx));
-
+bot.action('back_to_menu', (ctx) => showMainMenu(ctx));
 
 // Action handlers for each button to enter the relevant scenes
 bot.action('register', (ctx) => ctx.scene.enter('register'));
@@ -380,6 +437,7 @@ bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 bot.action('create_airdrop', (ctx) => ctx.scene.enter('create_airdrop'));
 bot.action('view_tasks', (ctx) => getAllTasks(ctx));
 bot.action('view_airdrops', (ctx) => getAllAirdrops(ctx));
+
 
 
 
@@ -450,6 +508,58 @@ bot.action(/airdrop_button_(.+)/, async (ctx) => {
    
 });
 
+
+
+// Handle "View Wallet" action
+bot.action('view_wallet', async (ctx) => {
+  const telegramId = ctx.from.id;
+
+  // Retrieve user data from the database
+  const user = await User.findOne({ telegramId });
+  if (!user) {
+    await ctx.reply("No wallet information found. Please register your wallet first.");
+    return showMainMenu(ctx); // Send back to the main menu
+  }
+
+  const messageText = `💼 Wallet Information:\n\n` +
+                      `Solana Wallet: ${user.solanaWallet || 'Not Registered'}\n` +
+                      `Balance: ${user.balance || 0} tokens\n\n` +
+                      `Choose an option below:`;
+
+  await ctx.reply(messageText, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Withdraw All", callback_data: "withdraw_all" }],
+        [{ text: "Go Back", callback_data: "back_to_menu" }]
+      ]
+    }
+  });
+});
+
+// Handle "Withdraw All" action
+bot.action('withdraw_all', async (ctx) => {
+  const telegramId = ctx.from.id;
+
+  // Retrieve the user's balance from the database
+  const user = await User.findOne({ telegramId });
+  if (!user || user.balance <= 0) {
+    await ctx.reply("Your balance is zero or not available.");
+    return showMainMenu(ctx); // Send back to the main menu if no balance
+  }
+
+  // Process withdrawal (placeholder for actual Solana transaction code)
+  const withdrawalAmount = user.balance;
+  user.balance = 0; // Reset balance after withdrawal
+  await user.save();
+
+  await ctx.reply(`Withdrawal of ${withdrawalAmount} tokens has been processed.`);
+  showMainMenu(ctx); // Show the main menu after withdrawal
+});
+
+
+
+/////////////////////////////////////////APP WEBHOOK
+
 // Twitter OAuth callback
 const app = express();
 app.use(bot.webhookCallback('/telegram-webhook'));
@@ -502,6 +612,7 @@ app.get('/twitter_callback', async (req, res) => {
     if (!task) return res.send("Task not found.");
 
     await processTask(session,task,accessToken,accessSecret);
+    await OAuthSession.deleteOne({ telegramId: oauthsession.telegramId })
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
@@ -565,10 +676,9 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
     
 
     //would add to user balance the session. oauth mongo
-
     console.log("Twitter task successfully processed for task:", oauthsession.taskId);
     bot.telegram.sendMessage(oauthsession.telegramId, `Twitter task for task ID ${oauthsession.taskId} completed successfully for ${task.rewardAmount} tokens.`);
-    await OAuthSession.deleteOne({ telegramId: oauthsession.telegramId })
+    
   } catch (error) {
     
     console.error("Error processing Twitter actions:", error);
