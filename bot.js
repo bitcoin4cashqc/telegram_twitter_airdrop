@@ -547,12 +547,19 @@ bot.action('withdraw_all', async (ctx) => {
     return showMainMenu(ctx); // Send back to the main menu if no balance
   }
 
-  // Process withdrawal (placeholder for actual Solana transaction code)
-  const withdrawalAmount = user.balance;
-  user.balance = 0; // Reset balance after withdrawal
-  await user.save();
+  try {
+    // Process the withdrawal
+    const message = await processWithdrawal(user.solanaWallet, user.balance);
 
-  await ctx.reply(`Withdrawal of ${withdrawalAmount} tokens has been processed.`);
+    // Reset the user's balance to 0 after successful withdrawal
+    user.balance = 0;
+    await user.save();
+
+    await ctx.reply(message); // Notify the user of success
+  } catch (error) {
+    await ctx.reply(error.message); // Notify the user of any errors
+  }
+  
   showMainMenu(ctx); // Show the main menu after withdrawal
 });
 
