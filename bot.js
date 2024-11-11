@@ -12,6 +12,8 @@ const User = require('./models/User');
 const Task = require('./models/Task');
 const Airdrop = require('./models/Airdrop');
 const OAuthSession = require('./models/OAuthSession');
+const UserTask = require('./models/UserTask');
+const UserAirdrop = require('./models/UserAirdrop');
 
 
 const skipTwitter = process.env.SKIP_TWITTER === 'true';
@@ -168,6 +170,52 @@ async function getAllAirdrops(ctx) {
     await ctx.reply("Failed to retrieve airdrops. Please try again later.");
   }
 }
+
+//Function to check if X user have made X task
+async function hasUserCompletedTask(telegramId, taskId) {
+  const userTask = await UserTask.findOne({ telegramId, taskId });
+  return !!userTask; // Returns true if userTask exists, false otherwise
+}
+
+//Function to mark task done by X user
+async function markTaskCompleted(telegramId, taskId) {
+  const userTask = new UserTask({ telegramId, taskId });
+  await userTask.save();
+}
+
+
+//Function to check if X user have made X Airrop
+async function hasUserCompletedAirdrop(telegramId, airdropId) {
+  const airdropTask = await UserAirdrop.findOne({ telegramId, airdropId });
+  return !!airdropTask; // Returns true if userTask exists, false otherwise
+}
+
+//Function to mark airdrop done by X user
+async function markAirdropCompleted(telegramId, airdropId) {
+  const airdropTask = new UserAirdrop({ telegramId, airdropId });
+  await airdropTask.save();
+}
+
+async function topUpUserBalance(telegramId, amount) {
+  await User.findOneAndUpdate(
+    { telegramId },
+    { $inc: { balance: amount } },
+    { new: true, upsert: true } // upsert ensures user document is created if not found
+  );
+}
+
+async function removeFromUserBalance(telegramId, amount) {
+  const user = await User.findOne({ telegramId });
+  if (!user || user.balance < amount) {
+    return false; // Insufficient balance
+  }
+
+  user.balance -= amount;
+  await user.save();
+  return true; // Deduction successful
+}
+
+/////////////////////////////SCENES/////////////////////////////////
 
 
 // Define the register scene
@@ -353,8 +401,19 @@ bot.action(/task_button_(.+)/, async (ctx) => {
     await ctx.reply("This Task has expired. Please choose another task.");
     return showMainMenu(ctx);  // Call the main menu function directly
   }
+
+  //check if user already did the task
+  const telegramId = ctx.from.id;
+  const taskCheck = await hasUserCompletedTask(telegramId,taskId)
+
+  if (taskCheck){
+    await ctx.reply("This Task was already completed by you. Please choose another task.");
+    return showMainMenu(ctx);  // Call the main menu function directly
+  }
   
   ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
+  markTaskCompleted(telegramId, taskId) 
+  topUpUserBalance(telegramId, task.rewardAmount)
 });
 
 // OAuth initiation and callback handler
@@ -375,7 +434,19 @@ bot.action(/airdrop_button_(.+)/, async (ctx) => {
      return showMainMenu(ctx);  // Call the main menu function directly
    }
 
-   await ctx.reply("You claimed the airdrop!");
+  //check if user already did the task
+  const telegramId = ctx.from.id;
+  const airdropCheck = await hasUserCompletedAirdrop(telegramId,airdropId)
+
+  if (airdropCheck){
+    await ctx.reply("This Airdrop was already claimed by you. Please choose another airdrop.");
+    return showMainMenu(ctx);  // Call the main menu function directly
+  }
+
+   
+  markAirdropCompleted(telegramId, airdropId) 
+  topUpUserBalance(telegramId, aidrop.rewardAmount)
+  await ctx.reply("You claimed the airdrop!");
    
 });
 
