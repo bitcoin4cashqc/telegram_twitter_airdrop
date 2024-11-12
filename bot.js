@@ -497,7 +497,7 @@ const commentScene = new Scenes.WizardScene(
 
     // Attempt to process the task with the comment
     try {
-      await processTask(oauthSession, task, oauthSession.accessToken, oauthSession.accessSecret, comment);
+      await processTask(oauthSession, task, oauthSession.oauth_token, oauthSession.oauth_token_secret, comment);
 
       // Mark the task as completed after success
       await markTaskCompleted(telegramId, taskId);
@@ -700,8 +700,8 @@ app.get('/twitter_callback', async (req, res) => {
     const { accessToken, accessSecret } = await twitterClient.login(oauth_verifier);
 
     // Update the session with access tokens
-    session.accessToken = accessToken;
-    session.accessSecret = accessSecret;
+    session.oauth_token = accessToken;
+    session.oauth_token_secret = accessSecret;
     await session.save();
 
     res.send("Authorization successful. Your Twitter account is now connected.");
@@ -791,7 +791,7 @@ async function createTask(postUrl, rewardAmount, expirationTime) {
   // Set a new taskId: increment the highest id, or start at 1 if none exists
   const newTaskId = latestTask ? latestTask.taskId + 1 : 1;
 
-  const newTask = new Task({ postUrl, rewardAmount, expirationTime, newTaskId });
+  const newTask = new Task({ postUrl, rewardAmount, expirationTime, taskId: newTaskId });
   await newTask.save();
   console.log(`Task created for post: ${postUrl} with reward: ${rewardAmount}`);
   return newTaskId; // Return the generated ID for further use
@@ -807,7 +807,7 @@ async function createAirdrop(rewardAmount, expirationTime) {
   // Set a new airdropId: increment the highest id, or start at 1 if none exists
   const newAirdropId = latestAirdrop ? latestAirdrop.airdropId + 1 : 1;
 
-  const newAirdrop = new Airdrop({rewardAmount, expirationTime, newAirdropId });
+  const newAirdrop = new Airdrop({rewardAmount, expirationTime, airdropId: newAirdropId });
   await newAirdrop.save();
   console.log(`Airdrop created with reward: ${rewardAmount}`);
   return newAirdropId; // Return the generated ID for further use
