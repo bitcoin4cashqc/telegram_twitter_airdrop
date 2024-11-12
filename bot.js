@@ -417,16 +417,13 @@ const createTaskScene = new Scenes.WizardScene(
     await ctx.reply("Please provide the time limit in minutes:");
     return ctx.wizard.next();
   },
+  
   async (ctx) => {
     ctx.scene.state.expirationTime = ctx.message.text;
-    await ctx.reply("Please provide the task ID:");
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
     const { postUrl, rewardAmount, expirationTime } = ctx.scene.state;
-    const taskId = ctx.message.text;
+    
 
-    await createTask(postUrl, rewardAmount, expirationTime, taskId);
+    const taskId = await createTask(postUrl, rewardAmount, expirationTime);
     
     // Notify all users about the new task
     await notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx, "tasks");
@@ -455,16 +452,12 @@ const createAirdropScene = new Scenes.WizardScene(
     await ctx.reply("Please provide the time limit in minutes:");
     return ctx.wizard.next();
   },
+  
   async (ctx) => {
     ctx.scene.state.expirationTime = ctx.message.text;
-    await ctx.reply("Please provide the airdrop ID:");
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
     const { rewardAmount, expirationTime } = ctx.scene.state;
-    const airdropId = ctx.message.text;
-
-    await createAirdrop(rewardAmount, expirationTime, airdropId);
+    
+    const airdropId = await createAirdrop(rewardAmount, expirationTime, airdropId);
     
     // Notify all users about the new task
     await notifyAllUsers("", rewardAmount, expirationTime, airdropId, ctx, "airdrop");
@@ -659,37 +652,6 @@ const app = express();
 app.use(bot.webhookCallback('/telegram-webhook'));
 bot.telegram.setWebhook(`${process.env.WEBHOOK}/telegram-webhook`);
 
-// Modify OAuth initiation function to accept comment
-async function initiateOAuth(ctx, taskId, comment) {
-  const telegramId = ctx.from.id;
-  const twitterClient = new TwitterApi({
-    appKey: process.env.TWITTER_CONSUMER_KEY,
-    appSecret: process.env.TWITTER_CONSUMER_SECRET,
-  });
-
-  try {
-    const { oauth_token, oauth_token_secret } = await twitterClient.generateAuthLink(`${process.env.WEBHOOK}/twitter_callback`);
-
-    // Save the OAuth session in the database along with the comment
-    await OAuthSession.create({
-      telegramId,
-      oauth_token,
-      oauth_token_secret,
-      taskId,
-      comment, // Save the comment with the session
-    });
-
-    const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
-    //await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
-    //await ctx.reply(`[Open on Twitter](${oauthUrl})`, { parse_mode: 'Markdown' });
-    await ctx.reply(`Click <a href="${oauthUrl}">here</a> to open on Twitter. Please note: this link may not work correctly if opened directly within Telegram. For best results, open it in an external browser, or add "api.twitter.com" in exceptions under Exchanges Parameters > Integrated browser.`, { parse_mode: 'HTML' });
-
-
-  } catch (error) {
-    console.error("Error getting request token:", error);
-    ctx.reply("Failed to initiate Twitter authorization.");
-  }
-}
 
 app.get('/twitter_callback', async (req, res) => {
   const { oauth_token, oauth_verifier } = req.query;
@@ -811,21 +773,35 @@ async function processUpdate(telegramId, solanaWallet) {
 }
 
 // Function to create a new task in the Task model
-async function createTask(postUrl, rewardAmount, expirationTime, taskId) {
+async function createTask(postUrl, rewardAmount, expirationTime) {
   expirationTime = new Date(Date.now() + expirationTime * 60000); // Set the expiration time
 
-  const newTask = new Task({ postUrl, rewardAmount, expirationTime, taskId });
+  // Find the highest taskId in the database
+  const latestTask = await Task.findOne().sort({ taskId: -1 });
+
+  // Set a new taskId: increment the highest id, or start at 1 if none exists
+  const newTaskId = latestTask ? latestTask.taskId + 1 : 1;
+
+  const newTask = new Task({ postUrl, rewardAmount, expirationTime, newTaskId });
   await newTask.save();
   console.log(`Task created for post: ${postUrl} with reward: ${rewardAmount}`);
+  return newTaskId; // Return the generated ID for further use
 }
 
 // Function to create a new task in the Task model
-async function createAirdrop(rewardAmount, expirationTime, airdropId) {
+async function createAirdrop(rewardAmount, expirationTime) {
   expirationTime = new Date(Date.now() + expirationTime * 60000); // Set the expiration time
 
-  const newAirdrop = new Airdrop({rewardAmount, expirationTime, airdropId });
+  // Find the highest airdropId in the database
+  const latestAirdrop = await Airdrop.findOne().sort({ airdropId: -1 });
+
+  // Set a new airdropId: increment the highest id, or start at 1 if none exists
+  const newAirdropId = latestAirdrop ? latestAirdrop.airdropId + 1 : 1;
+
+  const newAirdrop = new Airdrop({rewardAmount, expirationTime, newAirdropId });
   await newAirdrop.save();
   console.log(`Airdrop created with reward: ${rewardAmount}`);
+  return newAirdropId; // Return the generated ID for further use
 }
 
 
