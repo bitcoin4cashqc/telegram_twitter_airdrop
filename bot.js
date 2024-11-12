@@ -10,7 +10,8 @@ const BigNumber = require('bignumber.js'); // For accurate floating-point arithm
 
 
 const { Connection, Keypair, PublicKey, clusterApiUrl } = require('@solana/web3.js');
-const { Token, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getOrCreateAssociatedTokenAccount, transfer, getMint } = require('@solana/spl-token');
+
 
 const NETWORK = clusterApiUrl('mainnet-beta'); // Change to 'devnet' for testing
 const connection = new Connection(NETWORK, 'confirmed');
@@ -244,25 +245,25 @@ async function processWithdrawal(userWalletAddress, amount) {
     const userPublicKey = new PublicKey(userWalletAddress);
     const mintAddress = new PublicKey(process.env.TOKEN_MINT_ADDRESS);
 
-    // Load token program and retrieve token decimals
-    const token = new Token(connection, mintAddress, TOKEN_PROGRAM_ID, adminKeypair);
-    const mintInfo = await token.getMintInfo();
+    // Retrieve the mint information for decimals
+    const mintInfo = await getMint(connection, mintAddress);
     const decimals = mintInfo.decimals;
 
     // Convert amount to smallest units based on decimals
     const amountInSmallestUnits = new BigNumber(amount).multipliedBy(new BigNumber(10).pow(decimals)).toFixed(0);
 
-    // Get admin and user token accounts
-    const adminTokenAccount = await token.getOrCreateAssociatedAccountInfo(adminKeypair.publicKey);
-    const userTokenAccount = await token.getOrCreateAssociatedAccountInfo(userPublicKey);
+    // Get or create token accounts
+    const adminTokenAccount = await getOrCreateAssociatedTokenAccount(connection, adminKeypair, mintAddress, adminKeypair.publicKey);
+    const userTokenAccount = await getOrCreateAssociatedTokenAccount(connection, adminKeypair, mintAddress, userPublicKey);
 
     // Transfer tokens
-    await token.transfer(
-      adminTokenAccount.address,
-      userTokenAccount.address,
-      adminKeypair.publicKey,
-      [],
-      new BigNumber(amountInSmallestUnits).toNumber() // Ensure it's an integer
+    await transfer(
+      connection,
+      adminKeypair,           // payer
+      adminTokenAccount.address,  // from
+      userTokenAccount.address,   // to
+      adminKeypair.publicKey,     // authority
+      new BigNumber(amountInSmallestUnits).toNumber() // amount in smallest units
     );
 
     console.log(`Successfully transferred ${amount} tokens to ${userWalletAddress}`);
@@ -272,6 +273,7 @@ async function processWithdrawal(userWalletAddress, amount) {
     throw new Error("Withdrawal failed. Please try again later.");
   }
 }
+
 /////////////////////////////SCENES/////////////////////////////////
 
 
@@ -559,7 +561,7 @@ bot.action('withdraw_all', async (ctx) => {
   } catch (error) {
     await ctx.reply(error.message); // Notify the user of any errors
   }
-  
+
   showMainMenu(ctx); // Show the main menu after withdrawal
 });
 
