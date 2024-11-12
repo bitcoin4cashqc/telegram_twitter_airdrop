@@ -623,7 +623,11 @@ async function initiateOAuth(ctx, taskId, comment) {
     });
 
     const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
-    await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
+    //await ctx.reply(`Please authorize via Twitter: ${oauthUrl}`);
+    //await ctx.reply(`[Open on Twitter](${oauthUrl})`, { parse_mode: 'Markdown' });
+    await ctx.reply(`Click <a href="${oauthUrl}">here</a> to open on Twitter. Please note: this link may not work correctly if opened directly within Telegram. For best results, open it in an external browser, or add "api.twitter.com" in exceptions under Exchanges Parameters > Integrated browser.`, { parse_mode: 'HTML' });
+
+
   } catch (error) {
     console.error("Error getting request token:", error);
     ctx.reply("Failed to initiate Twitter authorization.");
@@ -649,7 +653,7 @@ app.get('/twitter_callback', async (req, res) => {
     if (!task) return res.send("Task not found.");
 
     await processTask(session,task,accessToken,accessSecret);
-    await OAuthSession.deleteOne({ telegramId: oauthsession.telegramId })
+    await OAuthSession.deleteOne({ telegramId: session.telegramId })
     res.send("Authorization successful. Your task will be processed.");
   } catch (error) {
     console.error("Error getting access token:", error);
