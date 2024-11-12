@@ -32,7 +32,11 @@ mongoose.connect('mongodb://localhost:27017/telegram_bot', {});
 // Initialize the bot with your bot token
 const bot = new Telegraf(process.env.TELEGRAM_BOT_API);
 bot.use(session());
-const admin = process.env.TG_ADMIN_ID;
+
+
+const admin = process.env.TG_ADMIN_ID.split(',').map(id => id.trim());
+
+
 
 // Define rate limit plugin
 const rateLimitPlugin = new TwitterApiRateLimitPlugin();
@@ -64,7 +68,8 @@ const admin_menu = [
 
 // Function to handle the /start command
 async function showMainMenu(ctx) {
-  const main_menu = (admin !== ctx.from.id.toString()) ? user_menu : admin_menu;
+  const main_menu = admin.includes(ctx.from.id.toString()) ? admin_menu : user_menu;
+
   await ctx.reply("Welcome! 👋 Choose an option below to get started:", {
     reply_markup: {
       inline_keyboard: main_menu
@@ -285,7 +290,14 @@ const registerScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    const solanaWallet = ctx.message.text;
+    // Validate Solana Wallet Address input
+    const solanaWallet = ctx.message?.text;
+
+    if (!solanaWallet || solanaWallet.trim() === "") {
+      await ctx.reply("The Solana Wallet address can't be empty.");
+      await ctx.scene.leave();
+      return showMainMenu(ctx);  // Call the main menu function directly
+    }
 
     // Validate Solana Wallet Address
     if (!isValidSolanaAddress(solanaWallet)) {
@@ -309,8 +321,14 @@ const updateScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    // Validate Solana Wallet Address
-    const solanaWallet = ctx.message.text;
+    // Validate Solana Wallet Address input
+    const solanaWallet = ctx.message?.text;
+
+    if (!solanaWallet || solanaWallet.trim() === "") {
+      await ctx.reply("The Solana Wallet address can't be empty.");
+      await ctx.scene.leave();
+      return showMainMenu(ctx);  // Call the main menu function directly
+    }
 
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
@@ -328,7 +346,7 @@ const updateScene = new Scenes.WizardScene(
 const createTaskScene = new Scenes.WizardScene(
   'create_task',
   async (ctx) => {
-    if (admin !== ctx.from.id.toString()) {
+    if (!admin.includes(ctx.from.id.toString())) {
       await ctx.reply("Unauthorized access attempt.");
       return ctx.scene.leave();
     }
@@ -370,7 +388,7 @@ const createTaskScene = new Scenes.WizardScene(
 const createAirdropScene = new Scenes.WizardScene(
   'create_airdrop',
   async (ctx) => {
-    if (admin !== ctx.from.id.toString()) {
+    if (!admin.includes(ctx.from.id.toString())) {
       await ctx.reply("Unauthorized access attempt.");
       return ctx.scene.leave();
     }
@@ -414,9 +432,19 @@ const commentScene = new Scenes.WizardScene(
   },
   async (ctx) => {
 
-    ctx.scene.state.comment = ctx.message.text; // Save comment to state
+    
+    // Validate and save the comment
+    const comment = ctx.message?.text;
+
+    if (!comment || comment.trim() === "") {
+      await ctx.reply("The comment can't be empty. Please provide a valid comment for the Twitter reply.");
+      return; // Keep user in the current step if comment is invalid
+    }
+
+    ctx.scene.state.comment = comment; // Save valid comment to state
     await initiateOAuth(ctx, ctx.scene.state.taskId, ctx.scene.state.comment); // Call OAuth initiation
     return ctx.scene.leave(); // Exit scene
+
   }
 );
 
