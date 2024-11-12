@@ -56,6 +56,9 @@ const user_menu = [
   [
     { text: "💼 View Wallet", callback_data: "view_wallet" } 
   
+  ], 
+  [
+    { text: "🔗 Connect Twitter", callback_data: "connect_twitter" },{ text: "❌ Disconnect Twitter", callback_data: "disconnect_twitter" }
   ]
 ]
 
@@ -231,6 +234,57 @@ async function removeFromUserBalance(telegramId, amount) {
   await user.save();
   return true; // Deduction successful
 }
+
+
+async function connectTwitter(ctx) {
+  const telegramId = ctx.from.id;
+
+  // Check if there is an existing OAuth session
+  let session = await OAuthSession.findOne({ telegramId });
+
+  if (session) {
+    await ctx.reply("You are already connected to Twitter. Use 'Disconnect Twitter' if you want to reset the connection.");
+    return;
+  }
+
+  const twitterClient = new TwitterApi({
+    appKey: process.env.TWITTER_CONSUMER_KEY,
+    appSecret: process.env.TWITTER_CONSUMER_SECRET,
+  });
+
+  try {
+    const { oauth_token, oauth_token_secret } = await twitterClient.generateAuthLink(`${process.env.WEBHOOK}/twitter_callback`);
+
+    // Save the new OAuth session in the database
+    session = new OAuthSession({
+      telegramId,
+      oauth_token,
+      oauth_token_secret,
+    });
+    await session.save();
+
+    const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
+    await ctx.reply(`Click <a href="${oauthUrl}">here</a> to connect your Twitter account. Note: it may not work in Telegram's built-in browser, so please open it in an external browser.`, { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error("Error generating new OAuth session:", error);
+    await ctx.reply("Failed to initiate Twitter authorization. Please try again.");
+  }
+}
+
+async function disconnectTwitter(ctx) {
+  const telegramId = ctx.from.id;
+
+  // Delete the OAuth session for the user
+  const result = await OAuthSession.deleteOne({ telegramId });
+
+  if (result.deletedCount > 0) {
+    await ctx.reply("You have successfully disconnected your Twitter account.");
+  } else {
+    await ctx.reply("No Twitter connection found.");
+  }
+}
+
+
 
 
 
@@ -467,6 +521,9 @@ bot.action('create_task', (ctx) => ctx.scene.enter('create_task'));
 bot.action('create_airdrop', (ctx) => ctx.scene.enter('create_airdrop'));
 bot.action('view_tasks', (ctx) => getAllTasks(ctx));
 bot.action('view_airdrops', (ctx) => getAllAirdrops(ctx));
+// Action handlers for connecting and disconnecting Twitter
+bot.action('connect_twitter', (ctx) => connectTwitter(ctx));
+bot.action('disconnect_twitter', (ctx) => disconnectTwitter(ctx));
 
 
 
@@ -640,6 +697,7 @@ app.get('/twitter_callback', async (req, res) => {
   try {
     const session = await OAuthSession.findOne({ oauth_token });
     if (!session) return res.send("Session expired or invalid. Please try again.");
+
     const twitterClient = new TwitterApi({
       appKey: process.env.TWITTER_CONSUMER_KEY,
       appSecret: process.env.TWITTER_CONSUMER_SECRET,
@@ -649,17 +707,18 @@ app.get('/twitter_callback', async (req, res) => {
 
     const { accessToken, accessSecret } = await twitterClient.login(oauth_verifier);
 
-    const task = await Task.findOne({ taskId: session.taskId });
-    if (!task) return res.send("Task not found.");
+    // Update the session with access tokens
+    session.accessToken = accessToken;
+    session.accessSecret = accessSecret;
+    await session.save();
 
-    await processTask(session,task,accessToken,accessSecret);
-    await OAuthSession.deleteOne({ telegramId: session.telegramId })
-    res.send("Authorization successful. Your task will be processed.");
+    res.send("Authorization successful. Your Twitter account is now connected.");
   } catch (error) {
-    console.error("Error getting access token:", error);
-    res.send("Authorization failed.");
+    console.error("Error during Twitter authorization:", error);
+    res.send("Authorization failed. Please try again.");
   }
 });
+
 
 // Function to handle Twitter actions with rate limit handling
 async function processTask(oauthsession,task,accessToken,accessSecret) {
