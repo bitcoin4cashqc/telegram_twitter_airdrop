@@ -469,31 +469,56 @@ const createAirdropScene = new Scenes.WizardScene(
   }
 );
 
-
 const commentScene = new Scenes.WizardScene(
   'commentScene',
   async (ctx) => {
-    ctx.scene.state.taskId = ctx.match[1]; // Save taskId to state for later use
     await ctx.reply("Please provide your comment for the Twitter reply:");
     return ctx.wizard.next();
   },
   async (ctx) => {
-
-    
-    // Validate and save the comment
+    // Capture and validate the comment
     const comment = ctx.message?.text;
-
     if (!comment || comment.trim() === "") {
       await ctx.reply("The comment can't be empty. Please provide a valid comment for the Twitter reply.");
-      return; // Keep user in the current step if comment is invalid
+      return;
     }
 
-    ctx.scene.state.comment = comment; // Save valid comment to state
-    await initiateOAuth(ctx, ctx.scene.state.taskId, ctx.scene.state.comment); // Call OAuth initiation
-    return ctx.scene.leave(); // Exit scene
+    // Get taskId and telegramId from scene state and context
+    const { taskId } = ctx.scene.state;
+    const telegramId = ctx.from.id;
 
+    // Retrieve OAuth session and task data
+    const oauthSession = await OAuthSession.findOne({ telegramId });
+    const task = await Task.findOne({ taskId });
+    if (!oauthSession || !task) {
+      await ctx.reply("Authorization or task information missing. Please reconnect your Twitter or select a valid task.");
+      return ctx.scene.leave();
+    }
+
+    // Attempt to process the task with the comment
+    try {
+      await processTask(oauthSession, task, oauthSession.accessToken, oauthSession.accessSecret, comment);
+
+      // Mark the task as completed after success
+      await markTaskCompleted(telegramId, taskId);
+      await topUpUserBalance(telegramId, task.rewardAmount);
+
+      await ctx.reply("Task completed successfully! You've earned tokens.");
+    } catch (error) {
+      console.error("Error during task completion:", error);
+
+      if (error.message.includes("OAuth")) {
+        await OAuthSession.deleteOne({ telegramId });
+        await ctx.reply("Your Twitter authorization has expired. Please reconnect by using the menu command.");
+      } else {
+        await ctx.reply("Failed to complete the task. Please try again later. You might want to reconnect your X Twitter");
+      }
+    }
+
+    return ctx.scene.leave(); // Exit scene after processing
   }
 );
+
 
 //////////////////////////////////////////////////////////////////////////3
 
@@ -522,39 +547,44 @@ bot.action('disconnect_twitter', (ctx) => disconnectTwitter(ctx));
 
 
 
-// OAuth initiation and callback handler
+
 bot.action(/task_button_(.+)/, async (ctx) => {
-  const taskId = ctx.match[1]; // Save taskId to state for later use
-  // Retrieve the task to check expiration
+  const taskId = ctx.match[1];
+  const telegramId = ctx.from.id;
+
+  // Retrieve the task and check expiration
   const task = await Task.findOne({ taskId });
   if (!task) {
     await ctx.reply("Task not found.");
     return;
   }
 
-  // Check if the airdrop has expired
   const currentTime = new Date();
-
   if (currentTime > task.expirationTime) {
     await ctx.reply("This Task has expired. Please choose another task.");
-    return showMainMenu(ctx);  // Call the main menu function directly
+    return showMainMenu(ctx);
   }
 
-  //check if user already did the task
-  const telegramId = ctx.from.id;
-  const taskCheck = await hasUserCompletedTask(telegramId,taskId)
-
-  if (taskCheck){
+  // Check if the user has already completed this task
+  const taskCheck = await hasUserCompletedTask(telegramId, taskId);
+  if (taskCheck) {
     await ctx.reply("This Task was already completed by you. Please choose another task.");
-    return showMainMenu(ctx);  // Call the main menu function directly
+    return showMainMenu(ctx);
   }
-  
-  ctx.scene.enter('commentScene'); // Enter the comment scene instead of initiating OAuth directly
-  markTaskCompleted(telegramId, taskId) 
-  topUpUserBalance(telegramId, task.rewardAmount)
+
+  // Check for an existing OAuth session
+  const oauthSession = await OAuthSession.findOne({ telegramId });
+  if (!oauthSession) {
+    await ctx.reply("You need to connect your Twitter account to complete this task. Use the /connect command to authorize Twitter.");
+    return;
+  }
+
+  // Proceed to the comment scene, storing taskId in scene state
+  ctx.scene.enter('commentScene', { taskId });
 });
 
-// OAuth initiation and callback handler
+
+// airdrop handler
 bot.action(/airdrop_button_(.+)/, async (ctx) => {
    const airdropId = ctx.match[1]; // Save airdropId to state for later use
    // Retrieve the task to check expiration
@@ -681,9 +711,7 @@ app.get('/twitter_callback', async (req, res) => {
   }
 });
 
-
-// Function to handle Twitter actions with rate limit handling
-async function processTask(oauthsession,task,accessToken,accessSecret) {
+async function processTask(oauthSession, task, accessToken, accessSecret, comment) {
   const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
@@ -698,12 +726,10 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
         return await callback();
       } catch (error) {
         if (error.rateLimitError && error.rateLimit) {
-          
           const timeToWait = error.rateLimit.reset * 1000 - Date.now();
-          console.log("THIS USER IS RATE LIMITED BY TWITTER: ", accessToken);
-          
-          bot.telegram.sendMessage(oauthsession.telegramId, `Twitter is rate limiting you. Gotta wait: `+timeToWait / 1000 + " seconds. Your task is pending and will be retried right after.");
-          await new Promise((resolve) => setTimeout(resolve, timeToWait));
+          console.log("User is rate-limited on Twitter:", accessToken);
+          bot.telegram.sendMessage(oauthSession.telegramId, `Twitter is rate limiting you. Waiting for ${timeToWait / 1000} seconds. Task will resume shortly.`);
+          await new Promise(resolve => setTimeout(resolve, timeToWait));
           continue;
         }
         throw error;
@@ -711,42 +737,25 @@ async function processTask(oauthsession,task,accessToken,accessSecret) {
     }
   }
 
-  // Get the stored comment from the OAuth session
-  
-  const comment = oauthsession.comment
-
-
   try {
     const xId = await twitterClient.v2.me();
-    
     const tweetId = task.postUrl.split("/").pop();
 
-    if (!skipTwitter){
-      
-      try {
-        await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id,tweetId));
-        await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id,tweetId));
-        await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
-      } catch (error) {
-        console.error("Non-rate limit error occurred:", error);
-        bot.telegram.sendMessage(oauthsession.telegramId, `An error occurred while processing your task. Please try again later.`);
-      }
-
+    if (!skipTwitter) {
+      await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id, tweetId));
+      await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id, tweetId));
+      await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
     }
-    
-    
-    
 
-    //would add to user balance the session. oauth mongo
-    console.log("Twitter task successfully processed for task:", oauthsession.taskId);
-    bot.telegram.sendMessage(oauthsession.telegramId, `Twitter task for task ID ${oauthsession.taskId} completed successfully for ${task.rewardAmount} tokens.`);
-    
+    console.log("Twitter task successfully processed for task:", task.taskId);
+    bot.telegram.sendMessage(oauthSession.telegramId, `Twitter task for task ID ${task.taskId} completed successfully for ${task.rewardAmount} tokens.`);
   } catch (error) {
-    
     console.error("Error processing Twitter actions:", error);
-    bot.telegram.sendMessage(oauthsession.telegramId, `Failed to complete Twitter task for task ID ${oauthsession.taskId}.`);
+    bot.telegram.sendMessage(oauthSession.telegramId, `Failed to complete Twitter task for task ID ${task.taskId}.`);
+    throw error;
   }
 }
+
 
 // Function to handle user registration
 async function processRegister(telegramId, solanaWallet) {
