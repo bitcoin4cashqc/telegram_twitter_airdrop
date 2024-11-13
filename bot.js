@@ -730,23 +730,25 @@ async function processTask(oauthSession, task, accessToken, accessSecret, commen
     plugins: [rateLimitPlugin],
   });
 
-  async function autoRetryOnRateLimitError(callback) {
-    while (true) {
-      try {
-        return await callback();
-      } catch (error) {
-        if (error.rateLimitError && error.rateLimit) {
-          const timeToWait = error.rateLimit.reset * 1000 - Date.now();
-          console.log("User is rate-limited on Twitter:", accessToken);
-          bot.telegram.sendMessage(oauthSession.telegramId, `Twitter is rate limiting you. Waiting for ${timeToWait / 1000} seconds. Task will resume shortly.`);
-          await new Promise(resolve => setTimeout(resolve, timeToWait));
-          continue;
-        }
-        throw error;
+  async function tryTwitterAction(callback) {
+    try {
+      return await callback();
+    } catch (error) {
+      // Detect rate limit error and return retry information instead of endlessly retrying
+      if (error.rateLimitError && error.rateLimit) {
+        const timeToWait = error.rateLimit.reset * 1000 - Date.now();
+        const minutes = Math.ceil(timeToWait / 60000);
+        
+        console.log("User is rate-limited on Twitter:", accessToken);
+        await bot.telegram.sendMessage(
+          oauthSession.telegramId,
+          `Twitter is currently rate-limiting actions. Please try again in approximately ${minutes} minutes.`
+        );
+        throw new Error("Rate limit error, user notified to retry later.");
       }
+      throw error;
     }
   }
-
 
   try {
     const xId = await twitterClient.v2.me();
@@ -754,40 +756,37 @@ async function processTask(oauthSession, task, accessToken, accessSecret, commen
 
     if (!skipTwitter) {
       try {
-        await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id, tweetId));
+        await tryTwitterAction(() => twitterClient.v2.like(xId.data.id, tweetId));
       } catch (error) {
         if (!error.message.includes("already liked")) throw error; // Ignore "already liked" error
       }
 
       try {
-        await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id, tweetId));
+        await tryTwitterAction(() => twitterClient.v2.retweet(xId.data.id, tweetId));
       } catch (error) {
-        if (!error.message.includes("You cannot retweet a Tweet that you have already retweeted")) throw error; // Ignore "already retweeted" error
+        if (!error.message.includes("already retweeted")) throw error; // Ignore "already retweeted" error
       }
 
       try {
-        await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+        await tryTwitterAction(() => twitterClient.v2.reply(comment, tweetId));
       } catch (error) {
         if (!error.message.includes("has already replied")) throw error; // Ignore "already replied" error
       }
     }
 
   } catch (error) {
-    // Handle only OAuth-related errors for session re-authentication
     if (error.code === 401 || error.message.includes("Invalid or expired token")) {
       console.error("OAuth error detected. Prompting user to reauthenticate:", error);
-      
       await OAuthSession.deleteOne({ telegramId: oauthSession.telegramId });
       throw new Error("OAuth session invalidated; user needs to reauthenticate.");
+    } else if (error.message.includes("Rate limit error")) {
+      console.warn("Task execution halted due to rate limit.");
+      // Additional handling if necessary when rate limit error
     } else {
       console.error("Error processing Twitter actions:", error);
-      
-      throw error; // Throw other errors as they are
+      throw error; // Other errors are rethrown as they are
     }
   }
-
-  
-
 }
 
 
