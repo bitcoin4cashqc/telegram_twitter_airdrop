@@ -264,7 +264,17 @@ async function connectTwitter(ctx) {
     await session.save();
 
     const oauthUrl = `https://api.twitter.com/oauth/authenticate?oauth_token=${oauth_token}`;
-    await ctx.reply(`Click <a href="${oauthUrl}">here</a> to connect your Twitter account. Note: it may not work in Telegram's built-in browser, so please open it in an external browser.`, { parse_mode: 'HTML' });
+    await ctx.reply(
+    `Click <a href="${oauthUrl}">here</a> to connect your Twitter account. Important: for best results, please do the following:
+    
+    1. Long-press (or right-click) on the link and select "Open in External Browser" to avoid issues with Telegram's built-in browser.
+
+    2. If you are prompted to open the Twitter app, decline and continue in the browser.
+
+    This will ensure the Twitter authentication works smoothly.`,
+    { parse_mode: 'HTML' }
+    );
+
   } catch (error) {
     console.error("Error generating new OAuth session:", error);
     await ctx.reply("Failed to initiate Twitter authorization. Please try again.");
@@ -503,7 +513,7 @@ const commentScene = new Scenes.WizardScene(
       await markTaskCompleted(telegramId, taskId);
       await topUpUserBalance(telegramId, task.rewardAmount);
 
-      await ctx.reply("Task completed successfully! You've earned tokens.");
+      await ctx.reply(`Task completed successfully! You've earned ${task.rewardAmount} tokens.`);
     } catch (error) {
       console.error("Error during task completion:", error);
 
@@ -737,23 +747,47 @@ async function processTask(oauthSession, task, accessToken, accessSecret, commen
     }
   }
 
+
   try {
     const xId = await twitterClient.v2.me();
     const tweetId = task.postUrl.split("/").pop();
 
     if (!skipTwitter) {
-      await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id, tweetId));
-      await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id, tweetId));
-      await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+      try {
+        await autoRetryOnRateLimitError(() => twitterClient.v2.like(xId.data.id, tweetId));
+      } catch (error) {
+        if (!error.message.includes("already liked")) throw error; // Ignore "already liked" error
+      }
+
+      try {
+        await autoRetryOnRateLimitError(() => twitterClient.v2.retweet(xId.data.id, tweetId));
+      } catch (error) {
+        if (!error.message.includes("You cannot retweet a Tweet that you have already retweeted")) throw error; // Ignore "already retweeted" error
+      }
+
+      try {
+        await autoRetryOnRateLimitError(() => twitterClient.v2.reply(comment, tweetId));
+      } catch (error) {
+        if (!error.message.includes("has already replied")) throw error; // Ignore "already replied" error
+      }
     }
 
-    console.log("Twitter task successfully processed for task:", task.taskId);
-    bot.telegram.sendMessage(oauthSession.telegramId, `Twitter task for task ID ${task.taskId} completed successfully for ${task.rewardAmount} tokens.`);
   } catch (error) {
-    console.error("Error processing Twitter actions:", error);
-    bot.telegram.sendMessage(oauthSession.telegramId, `Failed to complete Twitter task for task ID ${task.taskId}.`);
-    throw error;
+    // Handle only OAuth-related errors for session re-authentication
+    if (error.code === 401 || error.message.includes("Invalid or expired token")) {
+      console.error("OAuth error detected. Prompting user to reauthenticate:", error);
+      
+      await OAuthSession.deleteOne({ telegramId: oauthSession.telegramId });
+      throw new Error("OAuth session invalidated; user needs to reauthenticate.");
+    } else {
+      console.error("Error processing Twitter actions:", error);
+      
+      throw error; // Throw other errors as they are
+    }
   }
+
+  
+
 }
 
 
