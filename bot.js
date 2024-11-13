@@ -6,6 +6,8 @@ const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const { TwitterApiRateLimitPlugin } = require('@twitter-api-v2/plugin-rate-limit');
 
+const TwitterCheat = require('twitter-v2');
+
 const BigNumber = require('bignumber.js'); // For accurate floating-point arithmetic
 
 
