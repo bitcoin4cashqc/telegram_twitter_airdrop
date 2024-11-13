@@ -478,7 +478,6 @@ const createAirdropScene = new Scenes.WizardScene(
     return ctx.scene.leave();
   }
 );
-
 const commentScene = new Scenes.WizardScene(
   'commentScene',
   async (ctx) => {
@@ -486,18 +485,15 @@ const commentScene = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    // Capture and validate the comment
     const comment = ctx.message?.text;
     if (!comment || comment.trim() === "") {
       await ctx.reply("The comment can't be empty. Please provide a valid comment for the Twitter reply.");
       return;
     }
 
-    // Get taskId and telegramId from scene state and context
     const { taskId } = ctx.scene.state;
     const telegramId = ctx.from.id;
 
-    // Retrieve OAuth session and task data
     const oauthSession = await OAuthSession.findOne({ telegramId });
     const task = await Task.findOne({ taskId });
     if (!oauthSession || !task) {
@@ -505,7 +501,6 @@ const commentScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Attempt to process the task with the comment
     try {
       await processTask(oauthSession, task, oauthSession.oauth_token, oauthSession.oauth_token_secret, comment);
 
@@ -516,18 +511,20 @@ const commentScene = new Scenes.WizardScene(
       await ctx.reply(`Task completed successfully! You've earned ${task.rewardAmount} tokens.`);
     } catch (error) {
       console.error("Error during task completion:", error);
-
-      if (error.message.includes("OAuth")) {
+      if (error.message.includes("Rate limit")) {
+        await ctx.reply("Task could not be completed due to Twitter rate limits. Please try again later.");
+      } else if (error.message.includes("OAuth")) {
         await OAuthSession.deleteOne({ telegramId });
-        await ctx.reply("Your Twitter authorization has expired. Please reconnect by using the menu command.");
+        await ctx.reply("Your Twitter authorization has expired. Please reconnect using the menu command.");
       } else {
-        await ctx.reply("Failed to complete the task. Please try again later. You might want to reconnect your X Twitter");
+        await ctx.reply("Failed to complete the task. Please try again later. You might want to reconnect your Twitter.");
       }
     }
 
-    return ctx.scene.leave(); // Exit scene after processing
+    return ctx.scene.leave();
   }
 );
+
 
 
 //////////////////////////////////////////////////////////////////////////3
