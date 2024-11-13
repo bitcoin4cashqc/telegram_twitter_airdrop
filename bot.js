@@ -50,9 +50,10 @@ const user_menu = [
     { text: "📝 Register Wallet", callback_data: "register" },
     { text: "🔄 Update Wallet", callback_data: "update" }
   ],
-  [
-    { text: "🔗 Connect Twitter", callback_data: "connect_twitter" },{ text: "❌ Disconnect Twitter", callback_data: "disconnect_twitter" }
-  ],
+  //[
+  //  { text: "🔗 Connect Twitter", callback_data: "connect_twitter" },{ text: "❌ Disconnect Twitter", callback_data: "disconnect_twitter" }
+  //],
+ 
   [
     { text: "📋 View Tasks", callback_data: "view_tasks" },{ text: "📋 View Airdrops", callback_data: "view_airdrops" }
   ],
