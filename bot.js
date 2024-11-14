@@ -347,8 +347,6 @@ async function processWithdrawal(userWalletAddress, amount) {
 }
 
 /////////////////////////////SCENES/////////////////////////////////
-
-
 // Define the register scene
 const registerScene = new Scenes.WizardScene(
   'register',
@@ -363,18 +361,34 @@ const registerScene = new Scenes.WizardScene(
     if (!solanaWallet || solanaWallet.trim() === "") {
       await ctx.reply("The Solana Wallet address can't be empty.");
       await ctx.scene.leave();
-      return showMainMenu(ctx);  // Call the main menu function directly
+      return showMainMenu(ctx);
     }
 
     // Validate Solana Wallet Address
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
       await ctx.scene.leave();
-      return showMainMenu(ctx);  // Call the main menu function directly
+      return showMainMenu(ctx);
     }
 
-    await processRegister(ctx.message.from.id, solanaWallet);
-    await ctx.reply(`Your Solana Wallet: ${solanaWallet}`);
+    // Store the valid Solana wallet in the scene state
+    ctx.scene.state.solanaWallet = solanaWallet;
+    await ctx.reply("Please provide your Twitter username (without @):");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    // Validate Twitter Username input
+    const twitterUsername = ctx.message?.text;
+
+    if (!twitterUsername || twitterUsername.trim() === "") {
+      await ctx.reply("The Twitter username can't be empty.");
+      await ctx.scene.leave();
+      return showMainMenu(ctx);
+    }
+
+    // Save both wallet and Twitter username in the database
+    await processRegister(ctx.message.from.id, ctx.scene.state.solanaWallet, twitterUsername);
+    await ctx.reply(`Your Solana Wallet: ${ctx.scene.state.solanaWallet}\nTwitter Username: ${twitterUsername}`);
     return ctx.scene.leave();
   }
 );
@@ -394,20 +408,37 @@ const updateScene = new Scenes.WizardScene(
     if (!solanaWallet || solanaWallet.trim() === "") {
       await ctx.reply("The Solana Wallet address can't be empty.");
       await ctx.scene.leave();
-      return showMainMenu(ctx);  // Call the main menu function directly
+      return showMainMenu(ctx);
     }
 
     if (!isValidSolanaAddress(solanaWallet)) {
       await ctx.reply("The Solana Wallet address is invalid.");
       await ctx.scene.leave();
-      return showMainMenu(ctx);  // Call the main menu function directly
+      return showMainMenu(ctx);
     }
-    
-    await processUpdate(ctx.message.from.id, solanaWallet);
-    await ctx.reply(`Updated Solana Wallet to: ${solanaWallet}`);
+
+    // Store the valid Solana wallet in the scene state
+    ctx.scene.state.solanaWallet = solanaWallet;
+    await ctx.reply("Please provide your new Twitter username (without @):");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    // Validate Twitter Username input
+    const twitterUsername = ctx.message?.text;
+
+    if (!twitterUsername || twitterUsername.trim() === "") {
+      await ctx.reply("The Twitter username can't be empty.");
+      await ctx.scene.leave();
+      return showMainMenu(ctx);
+    }
+
+    // Update wallet and Twitter username in the database
+    await processUpdate(ctx.message.from.id, ctx.scene.state.solanaWallet, twitterUsername);
+    await ctx.reply(`Updated Solana Wallet to: ${ctx.scene.state.solanaWallet}\nUpdated Twitter Username to: ${twitterUsername}`);
     return ctx.scene.leave();
   }
 );
+
 
 // Define the create_task scene (admin-only)
 const createTaskScene = new Scenes.WizardScene(
@@ -791,24 +822,26 @@ async function processTask(oauthSession, task, accessToken, accessSecret, commen
 
 
 // Function to handle user registration
-async function processRegister(telegramId, solanaWallet) {
+async function processRegister(telegramId, solanaWallet, twitterUsername) {
   let user = await User.findOne({ telegramId });
   if (!user) {
-    user = new User({ telegramId, solanaWallet, balance: 0 });
+    user = new User({ telegramId, solanaWallet, twitterUsername, balance: 0 });
     await user.save();
-    console.log(`User ${telegramId} registered with Solana Wallet: ${solanaWallet}`);
+    console.log(`User ${telegramId} registered with Solana Wallet: ${solanaWallet} and Twitter Username: ${twitterUsername}`);
   } else {
     console.log(`User ${telegramId} already exists`);
   }
 }
 
+
 // Function to handle user updates
-async function processUpdate(telegramId, solanaWallet) {
+async function processUpdate(telegramId, solanaWallet, twitterUsername) {
   let user = await User.findOne({ telegramId });
   if (user) {
     user.solanaWallet = solanaWallet;
+    user.twitterUsername = twitterUsername;
     await user.save();
-    console.log(`User ${telegramId} updated with new Solana Wallet: ${solanaWallet}`);
+    console.log(`User ${telegramId} updated with new Solana Wallet: ${solanaWallet} and Twitter Username: ${twitterUsername}`);
   } else {
     console.log(`User ${telegramId} does not exist`);
   }
