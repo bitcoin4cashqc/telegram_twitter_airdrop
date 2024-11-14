@@ -6,7 +6,7 @@ const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const { TwitterApiRateLimitPlugin } = require('@twitter-api-v2/plugin-rate-limit');
 
-const TwitterCheat = require('twitter-v2');
+
 
 const BigNumber = require('bignumber.js'); // For accurate floating-point arithmetic
 
@@ -27,6 +27,14 @@ const UserAirdrop = require('./models/UserAirdrop');
 
 
 const skipTwitter = process.env.SKIP_TWITTER === 'true';
+const cheatTwitter = process.env.USE_OFFICIAL_TWITTER_API === 'true';
+
+buttonTask = "task_button_"
+
+if (cheatTwitter) {
+console.log("We are cheating twitter api.")
+buttonTask = "task_button_manual_"
+}
 
 // MongoDB connection
 mongoose.connect('mongodb://localhost:27017/telegram_bot', {});
@@ -49,8 +57,8 @@ const rateLimitPlugin = new TwitterApiRateLimitPlugin();
 
 const user_menu = [
   [
-    { text: "📝 Register Wallet", callback_data: "register" },
-    { text: "🔄 Update Wallet", callback_data: "update" }
+    { text: "📝 Register Account", callback_data: "register" },
+    { text: "🔄 Update Account", callback_data: "update" }
   ],
   //[
   //  { text: "🔗 Connect Twitter", callback_data: "connect_twitter" },{ text: "❌ Disconnect Twitter", callback_data: "disconnect_twitter" }
@@ -102,7 +110,7 @@ async function notifyAllUsers(postUrl, rewardAmount, expirationTime, taskId, ctx
   var dataToSend = {}
   if (types == "tasks"){
     messageText = `New Task Available:\n\nPost: ${postUrl}\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nTask ID: ${taskId}`;
-    dataToSend = { text: "Participate in Task", callback_data: `task_button_${taskId}` }
+    dataToSend = { text: "Participate in Task", callback_data: `${buttonTask+taskId}` }
   }else{
     messageText = `New Airdrop Available:\n\nReward: ${rewardAmount}\nExpires At: ${expirationTime.toLocaleString()}\nAirdrop ID: ${taskId}`;
     dataToSend = { text: "Participate in Airdrop", callback_data: `airdrop_button_${taskId}` }
@@ -151,7 +159,7 @@ async function getAllTasks(ctx) {
     // Display each task with its details and participation button
     for (const task of tasks) {
       const messageText = `New Task Available:\n\nPost: ${task.postUrl}\nReward: ${task.rewardAmount}\nExpires At: ${task.expirationTime.toLocaleString()}\nTask ID: ${task.taskId}`;
-      const dataToSend = { text: "Participate in Task", callback_data: `task_button_${task.taskId}` };
+      const dataToSend = { text: "Participate in Task", callback_data: `${buttonTask+task.taskId}` };
 
       await ctx.reply(messageText, {
         reply_markup: {
@@ -512,6 +520,8 @@ const createAirdropScene = new Scenes.WizardScene(
     return ctx.scene.leave();
   }
 );
+
+
 const commentScene = new Scenes.WizardScene(
   'commentScene',
   async (ctx) => {
@@ -587,6 +597,101 @@ bot.action('disconnect_twitter', (ctx) => disconnectTwitter(ctx));
 
 
 
+// Function to verify task using the endpoint
+async function verifyTaskEndpoint(screen_name, tweet_id) {
+  const endpoint = process.env.CUSTOM_ENDPOINT_URL;
+  const url = `${endpoint}?screen_name=${screen_name}&tweet_id=${tweet_id}`;
+  const response = await fetch(url);
+  const data = await response.json();
+  return data.comment_result.commented && data.retweet_result.retweeted;
+}
+
+
+
+
+// New task button action for manual mode
+bot.action(/task_button_manual_(.+)/, async (ctx) => {
+  const taskId = ctx.match[1];
+  const telegramId = ctx.from.id;
+
+  const task = await Task.findOne({ taskId });
+  if (!task) {
+    await ctx.reply("Task not found.");
+    return;
+  }
+
+  const currentTime = new Date();
+  if (currentTime > task.expirationTime) {
+    await ctx.reply("This task has expired. Please choose another task.");
+    return showMainMenu(ctx);
+  }
+
+  const taskCheck = await hasUserCompletedTask(telegramId, taskId);
+  if (taskCheck) {
+    await ctx.reply("You have already completed this task. Please choose another task.");
+    return showMainMenu(ctx);
+  }
+
+  const user = await User.findOne({ telegramId });
+  if (!user || !user.twitterUsername) {
+    await ctx.reply("You need to register your Twitter account to complete this task.");
+    return;
+  }
+
+  await ctx.reply(
+    `Please go to this post: ${task.postUrl}, like, retweet, and comment on it.\n\n` +
+    `Once done, click "Check" below to verify.`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Check", callback_data: `task_verify_${taskId}` }],
+          [{ text: "Go Back", callback_data: "back_to_menu" }]
+        ]
+      }
+    }
+  );
+});
+
+// Task verification callback
+bot.action(/task_verify_(.+)/, async (ctx) => {
+  const taskId = ctx.match[1];
+  const telegramId = ctx.from.id;
+  const task = await Task.findOne({ taskId });
+  if (!task) {
+    await ctx.reply("Task not found.");
+    return;
+  }
+
+  const user = await User.findOne({ telegramId });
+  const twitterUsername = user ? user.twitterUsername : null;
+
+  if (!twitterUsername) {
+    await ctx.reply("You need to register your Twitter account.");
+    return;
+  }
+
+  const tweetId = task.postUrl.split("/").pop();
+  const verified = await verifyTaskEndpoint(twitterUsername, tweetId);
+
+  if (verified) {
+    await markTaskCompleted(telegramId, taskId);
+    await topUpUserBalance(telegramId, task.rewardAmount);
+    await ctx.reply(`Task verified! You've earned ${task.rewardAmount} tokens.`);
+  } else {
+    await ctx.reply(
+      "Verification failed. Please ensure you've liked, retweeted, and commented on the post.\n" +
+      "Wait 60 seconds, then click 'Check' again to retry.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Retry", callback_data: `task_verify_${taskId}` }],
+            [{ text: "Go Back", callback_data: "back_to_menu" }]
+          ]
+        }
+      }
+    );
+  }
+});
 
 
 bot.action(/task_button_(.+)/, async (ctx) => {
